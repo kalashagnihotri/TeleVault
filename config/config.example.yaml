@@ -1,0 +1,53 @@
+app:
+  dry_run: true
+  database_path: data/archive.sqlite3
+  log_directory: logs
+  cache_directory: cache
+  private_data_directory: private_data
+
+queue:
+  incoming_images: "G:/My Drive/TelegramMediaQueue/Incoming/Images"
+  incoming_videos: "G:/My Drive/TelegramMediaQueue/Incoming/Videos"
+  completed: "G:/My Drive/TelegramMediaQueue/Completed"
+  failed: "G:/My Drive/TelegramMediaQueue/Failed"
+  stable_seconds: 60
+  scan_interval_seconds: 300
+  cleanup_safety_days: 7
+
+telegram:
+  group_id: 0
+  topics:
+    people: 0
+    family_groups: 0
+    travel_nature: 0
+    everyday: 0
+    screenshots_documents: 0
+    videos: 0
+    misc: 0
+  caption_max_length: 900
+
+recognition:
+  enabled: false
+  gpu_preferred: true
+  cpu_fallback: true
+  face_match_threshold: 0.0
+  face_second_best_margin: 0.0
+  reference_directory: private_data/face_references
+  unknown_person_label: "Unknown Person"
+
+video:
+  pass_1_frames:
+    under_30_seconds: 4
+    under_2_minutes: 5
+    under_10_minutes: 7
+    over_10_minutes: 8
+  pass_2_total_frames:
+    under_30_seconds: 8
+    under_2_minutes: 15
+    under_10_minutes: 20
+    over_10_minutes: 25
+  pass_3_total_frames:
+    under_30_seconds: 15
+    under_2_minutes: 30
+    under_10_minutes: 45
+    over_10_minutes: 60

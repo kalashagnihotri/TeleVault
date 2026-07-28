@@ -1,0 +1,10 @@
+# Review package names and versions before installation.
+# Pin exact versions after Phase 1 is stable.
+PyYAML>=6,<7
+python-dotenv>=1,<2
+Pillow>=10,<12
+aiohttp>=3.9,<4
+pytest>=8,<9
+pytest-asyncio>=0.23,<1
+numpy==2.5.1
+opencv-python==4.13.0.92

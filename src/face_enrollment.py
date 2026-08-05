@@ -503,11 +503,8 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
             logger.error("Person %s has only %s references (minimum %s).", p['person_slug'], count, config.faces.minimum_references_per_person)
             return 1
             
-    import hashlib
-    ref_hashes.sort()
-    base_ref_hash = hashlib.sha256("".join(ref_hashes).encode()).hexdigest() if ref_hashes else "empty"
-    
-    from src.hashing import get_calibration_scope_hash
+    from src.hashing import get_reference_set_hash, get_calibration_scope_hash
+    base_ref_hash = get_reference_set_hash(ref_hashes)
     ref_set_hash = get_calibration_scope_hash(model_identity, base_ref_hash, config.faces.policy_identity)
     
     # Generate scores

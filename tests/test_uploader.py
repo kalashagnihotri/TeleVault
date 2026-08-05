@@ -171,3 +171,34 @@ async def test_dry_run_skips_reconciliation(test_config, tmp_path: Path):
     with db.connect() as conn:
         s = conn.execute("SELECT state FROM media WHERE id = ?", (mid,)).fetchone()["state"]
     assert s == "PREVIEW_UPLOADING"
+
+
+@pytest.mark.asyncio
+async def test_uploader_ignores_backed_up_media(test_config, tmp_path):
+    db_path = tmp_path / "test.db"
+    db = setup_db(db_path)
+    
+    logger = MagicMock()
+    mock_client = AsyncMock(spec=TelegramClient)
+    
+    with db.connect() as conn:
+        conn.execute(
+            f"INSERT INTO media (id, original_path, original_filename, size_bytes, sha256, short_hash, media_type, state, face_state, cleanup_state, modified_ns, discovered_at, updated_at) VALUES (10, 'path10', 'file10', 100, 'hash10', 'hash10', 'image', 'BACKED_UP', 'ANALYZED', 'PENDING', 0, 'now', 'now')"
+        )
+        # successful upload attempts
+        conn.execute(
+            "INSERT INTO upload_attempts (media_id, attempt_type, telegram_message_id, outcome, attempt_started_at, attempt_finished_at) VALUES (10, 'preview', 73, 'SUCCESS', 'now', 'now')"
+        )
+        conn.execute(
+            "INSERT INTO upload_attempts (media_id, attempt_type, telegram_message_id, outcome, attempt_started_at, attempt_finished_at) VALUES (10, 'original', 74, 'SUCCESS', 'now', 'now')"
+        )
+        
+    uploader = ArchiveUploader(test_config, db, mock_client, logger)
+    await uploader.upload_once()
+    
+    mock_client.send_photo_preview.assert_not_called()
+    mock_client.send_original_document.assert_not_called()
+    
+    with db.connect() as conn:
+        attempts = conn.execute("SELECT attempt_type, telegram_message_id FROM upload_attempts WHERE media_id = 10").fetchall()
+        assert len(attempts) == 2

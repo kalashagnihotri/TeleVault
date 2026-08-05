@@ -4,7 +4,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 VALID_TRANSITIONS = {
     "RESERVED": {"READY_TO_UPLOAD"},
@@ -763,12 +763,48 @@ class ArchiveDatabase:
                 (model_identity, reference_set_hash, accept_threshold, review_threshold, minimum_margin, individual_strong_support_threshold, positive_pair_count, negative_pair_count, now, report_json)
             )
 
-    def get_pending_face_analysis(self, limit: int = 10) -> list[dict]:
+    def get_pending_face_analysis(self, limit: int = 10, stale_minutes: int = 30) -> list[dict]:
+        stale_cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(minutes=stale_minutes)
+        ).isoformat()
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(
-                "SELECT id, sha256, original_path, state FROM media WHERE face_state = 'PENDING' AND state NOT IN ('BACKED_UP', 'CLEANED') LIMIT ?",
-                (limit,)
+                """
+                SELECT id, sha256, original_path, state, short_hash 
+                FROM media 
+                WHERE media_type = 'image'
+                  AND (
+                      face_state IN ('PENDING', 'FAILED')
+                      OR (
+                          face_state = 'ANALYZING'
+                          AND updated_at < ?
+                      )
+                  )
+                  AND state != 'CLEANED'
+                  AND cleanup_state != 'COMPLETED'
+                LIMIT ?
+                """,
+                (stale_cutoff, limit)
             ).fetchall()]
+
+    def has_successful_face_attempt(self, media_id: int, analysis_key: str, analysis_version: int, model_identity: str, reference_set_hash: str, calibration_id: int | None) -> bool:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT 1 
+                FROM face_analysis_attempts 
+                WHERE media_id = ? 
+                  AND analysis_key = ? 
+                  AND analysis_version = ? 
+                  AND model_identity = ? 
+                  AND reference_set_hash = ? 
+                  AND calibration_id IS ? 
+                  AND outcome = 'SUCCESS' 
+                LIMIT 1
+                """,
+                (media_id, analysis_key, analysis_version, model_identity, reference_set_hash, calibration_id)
+            ).fetchone() is not None
 
     def start_face_analysis_attempt(self, media_id: int, analysis_key: str, analysis_version: int, model_identity: str, reference_set_hash: str, calibration_id: int | None) -> int:
         now = datetime.now(timezone.utc).isoformat()

@@ -11,6 +11,7 @@ from src.database import ArchiveDatabase
 from src.face_engine import Cv2FaceEngine, OPENCV_AVAILABLE, FaceEngineError
 from src.image_utils import decode_image_with_exif
 from src.models import ImageFaceAnalysisResult
+from src.face_policy import CURRENT_ANALYSIS_VERSION
 from src.logging_utils import RuntimeOptions, ProcessingStage, log_private
 
 
@@ -34,6 +35,13 @@ def _to_float(score) -> float:
             raise ValueError(f"Score is not finite: {val}")
         return val
 
+
+
+class FaceAnalysisStageError(Exception):
+    def __init__(self, stage: str, cause: Exception) -> None:
+        super().__init__(type(cause).__name__)
+        self.stage = stage
+        self.cause = cause
 
 class FaceAnalysisWorker:
     def __init__(self, config: Config, database: ArchiveDatabase, engine, logger: logging.Logger, opts: RuntimeOptions | None = None):
@@ -83,9 +91,8 @@ class FaceAnalysisWorker:
                 
         self.ref_snapshot = valid_refs
         
-        ref_hashes.sort()
-        base_ref_hash = hashlib.sha256("".join(ref_hashes).encode()).hexdigest() if ref_hashes else "empty"
-        from src.hashing import get_calibration_scope_hash
+        from src.hashing import get_reference_set_hash, get_calibration_scope_hash
+        base_ref_hash = get_reference_set_hash(ref_hashes)
         policy_id = self.config.faces.policy_identity
         ref_set_hash = get_calibration_scope_hash(model_identity, base_ref_hash, policy_id)
         
@@ -135,7 +142,7 @@ class FaceAnalysisWorker:
         return scores_by_person, person_max_scores, person_aggregate_scores, sorted_people
 
     def _generate_analysis_key(self) -> tuple[str, int]:
-        version = 2
+        version = CURRENT_ANALYSIS_VERSION
         if not self.calibration_snapshot or self.calibration_snapshot == "INVALID":
             return ("UNCALIBRATED", version)
         return ("CALIBRATED", version)
@@ -161,8 +168,8 @@ class FaceAnalysisWorker:
         except Exception as e:
             res.stage = stage
             res.error_code = type(e).__name__
-            log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback: stage=DETECTION", short_hash, exc_info=True)
-            return res
+            log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback: stage=%s", short_hash, stage, exc_info=True)
+            raise FaceAnalysisStageError(stage, e) from e
             
         accepted_faces = []
         for idx, face in enumerate(raw_faces):
@@ -193,7 +200,6 @@ class FaceAnalysisWorker:
         for idx, face, confidence, w, h in accepted_faces:
             try:
                 stage = "ALIGNMENT"
-                
                 aligned = self.engine.align_face(image, face)
                 
                 stage = "EMBEDDING"
@@ -289,7 +295,6 @@ class FaceAnalysisWorker:
                     "error_stage": stage,
                     "error_code": type(e).__name__
                 })
-                continue
                 
         if len(res.face_results) != res.raw_detections:
             res.stage = "RESULT_ASSEMBLY"
@@ -343,6 +348,10 @@ class FaceAnalysisWorker:
                     else:
                         self.logger.info("Candidate %s [%s]: faces=%s, accepted=%s, unknown=%s", idx, short_hash, completed_faces, res.accepted_faces, res.unknown_faces)
                         
+            except FaceAnalysisStageError as exc:
+                self.logger.info("Candidate %s [%s]: decision=ANALYSIS_ERROR stage=%s error=%s", idx, short_hash, exc.stage, type(exc.cause).__name__)
+                self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, exc.stage, type(exc.cause).__name__)
+                log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback", short_hash, exc_info=True)
             except Exception as e:
                 self.logger.info("Candidate %s [%s]: decision=ANALYSIS_ERROR stage=%s error=%s", idx, short_hash, stage, type(e).__name__)
                 self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, stage, type(e).__name__)
@@ -362,13 +371,29 @@ class FaceAnalysisWorker:
         analysis_key, analysis_version = self._generate_analysis_key()
         
         model_identity = self.engine.model_identity()
-        ref_set_hash = hashlib.sha256("".join(sorted([r["source_sha256"] for r in (self.ref_snapshot or [])]))).hexdigest() if self.ref_snapshot else "empty"
+        from src.hashing import get_reference_set_hash, get_calibration_scope_hash
+        base_ref_hash = get_reference_set_hash(
+            r["source_sha256"] for r in (self.ref_snapshot or [])
+        )
+        policy_id = self.config.faces.policy_identity
+        ref_set_hash = get_calibration_scope_hash(model_identity, base_ref_hash, policy_id)
         calib_id = self.calibration_snapshot["calibration_id"] if self.calibration_snapshot and self.calibration_snapshot != "INVALID" else None
         
         for media in pending:
             media_id = media["id"]
             original_path = Path(media["original_path"])
-            short_hash = media.get("short_hash", str(media_id))
+            
+            short_hash = (
+                media.get("short_hash")
+                or (str(media["sha256"])[:8] if media.get("sha256") else None)
+                or "unhashed"
+            )
+            
+            if self.db.has_successful_face_attempt(media_id, analysis_key, analysis_version, model_identity, ref_set_hash, calib_id):
+                if media.get("face_state") != "ANALYZED" and media.get("face_state") != "NO_FACE":
+                    # Mark complete if needed, though this is a fallback
+                    pass
+                continue
             
             if not original_path.exists():
                 self.db.record_face_analysis_failure(media_id, -1, "SOURCE_MISSING", f"File missing", "FAILED")
@@ -382,12 +407,13 @@ class FaceAnalysisWorker:
                     self.db.record_face_analysis_failure(media_id, -1, "VIDEO_UNSUPPORTED", "Video analysis not yet implemented", "FAILED")
                     continue
                     
-            attempt_id = self.db.start_face_analysis_attempt(
-                media_id, analysis_key, analysis_version, model_identity, ref_set_hash, calib_id
-            )
-            
-            stage = "DECODE"
+            stage = "PERSIST_ATTEMPT"
             try:
+                attempt_id = self.db.start_face_analysis_attempt(
+                    media_id, analysis_key, analysis_version, model_identity, ref_set_hash, calib_id
+                )
+                
+                stage = "DECODE"
                 img_info = decode_image_with_exif(str(original_path))
                 image = img_info["image"]
                 
@@ -400,24 +426,32 @@ class FaceAnalysisWorker:
                     self.db.record_face_analysis_failure(media_id, attempt_id, f"ANALYSIS_ERROR", f"stage={res.stage} error={res.error_code}", "FAILED")
                     self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, res.stage, res.error_code)
                 elif res.raw_detections == 0:
-                    self.logger.info("Candidate %s [%s]: faces=0, decision=NO_FACE", idx, short_hash)
+                    self.logger.info("Candidate [%s] media_id=%s: faces=0, decision=NO_FACE", short_hash, media_id)
+                    stage = "PERSIST_RESULTS"
                     self.db.record_face_analysis_success(media_id, attempt_id, res.face_results)
                 elif res.raw_detections > 0 and res.accepted_size == 0 and res.ignored_tiny > 0:
-                    self.logger.info("Candidate %s [%s]: faces=0, decision=IGNORED_TINY", idx, short_hash)
+                    self.logger.info("Candidate [%s] media_id=%s: faces=0, decision=IGNORED_TINY", short_hash, media_id)
+                    stage = "PERSIST_RESULTS"
                     self.db.record_face_analysis_success(media_id, attempt_id, res.face_results)
                 elif res.accepted_size > 0 and completed_faces == 0 and res.processing_errors > 0:
-                    self.logger.info("Candidate %s [%s]: faces=0, decision=ANALYSIS_ERROR", idx, short_hash)
+                    self.logger.info("Candidate [%s] media_id=%s: faces=0, decision=ANALYSIS_ERROR", short_hash, media_id)
                     self.db.record_face_analysis_failure(media_id, attempt_id, f"ANALYSIS_ERROR", f"stage=RESULT_ASSEMBLY error=ALL_FACES_FAILED", "FAILED")
                 elif completed_faces > 0 and res.processing_errors > 0:
-                    self.logger.info("Candidate %s [%s]: faces=%s, decision=PARTIAL_ANALYSIS", idx, short_hash, completed_faces)
+                    self.logger.info("Candidate [%s] media_id=%s: faces=%s, decision=PARTIAL_ANALYSIS", short_hash, media_id, completed_faces)
+                    stage = "PERSIST_RESULTS"
                     self.db.record_face_analysis_success(media_id, attempt_id, res.face_results)
                 elif completed_faces > 0 and res.processing_errors == 0:
                     if len(res.face_results) == 1:
-                        self.logger.info("Candidate %s [%s]: faces=1, decision=%s", idx, short_hash, res.face_results[0]["decision"])
+                        self.logger.info("Candidate [%s] media_id=%s: faces=1, decision=%s", short_hash, media_id, res.face_results[0]["decision"])
                     else:
-                        self.logger.info("Candidate %s [%s]: faces=%s, accepted=%s, unknown=%s", idx, short_hash, completed_faces, res.accepted_faces, res.unknown_faces)
+                        self.logger.info("Candidate [%s] media_id=%s: faces=%s, accepted=%s, unknown=%s", short_hash, media_id, completed_faces, res.accepted_faces, res.unknown_faces)
+                    stage = "PERSIST_RESULTS"
                     self.db.record_face_analysis_success(media_id, attempt_id, res.face_results)
                     
+            except FaceAnalysisStageError as exc:
+                self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, exc.stage, type(exc.cause).__name__)
+                log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback", short_hash, exc_info=True)
+                self.db.record_face_analysis_failure(media_id, attempt_id, f"ANALYSIS_ERROR", f"stage={exc.stage} error={type(exc.cause).__name__}", "FAILED")
             except Exception as e:
                 self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, stage, type(e).__name__)
                 log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback", short_hash, exc_info=True)

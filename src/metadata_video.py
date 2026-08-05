@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from src.logging_utils import RuntimeOptions, log_private
 import re
 import subprocess
 from datetime import datetime
@@ -65,8 +66,12 @@ def extract_video_metadata(path: Path) -> MetadataResult:
                     break
 
     except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning(f"Failed to extract video metadata for {path.name} using ffprobe: {e}")
+        logger.warning("Failed to extract video metadata using ffprobe: error=%s", type(e).__name__)
+        if opts:
+            log_private(logger, opts.verbose_private, "Failed to extract video metadata path=%r", str(path), exc_info=True)
     except Exception as e:
-        logger.warning(f"Unexpected error extracting video metadata for {path.name}: {e}")
+        logger.warning("Unexpected error extracting video metadata: error=%s", type(e).__name__)
+        if opts:
+            log_private(logger, opts.verbose_private, "Unexpected error extracting video metadata path=%r", str(path), exc_info=True)
 
     return result

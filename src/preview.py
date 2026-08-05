@@ -20,7 +20,7 @@ def generate_image_preview(source_path: Path, output_path: Path) -> bool:
             img.save(output_path, "JPEG", quality=80)
             return True
     except Exception as e:
-        logger.warning(f"Failed to generate image preview for {source_path.name}: {e}")
+        logger.warning("Failed to generate image preview: error=%s", type(e).__name__)
         return False
 
 def generate_video_thumbnail(source_path: Path, output_path: Path) -> bool:
@@ -50,8 +50,8 @@ def generate_video_thumbnail(source_path: Path, output_path: Path) -> bool:
             if proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
                 return True
         except subprocess.TimeoutExpired:
-            logger.warning(f"ffmpeg timeout while generating thumbnail for {source_path.name} at {offset}s")
+            logger.warning("ffmpeg timeout while generating thumbnail at %ss", offset)
         except Exception as e:
-            logger.warning(f"ffmpeg error while generating thumbnail for {source_path.name} at {offset}s: {e}")
+            logger.warning("ffmpeg error while generating thumbnail at %ss: error=%s", offset, type(e).__name__)
             
     return False

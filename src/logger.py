@@ -19,9 +19,10 @@ class RedactingFormatter(logging.Formatter):
                 original = original.replace(secret, "***REDACTED***")
         return original
 
-def setup_logger(config: Config) -> logging.Logger:
+def setup_logger(config: Config, verbose_private: bool = False) -> logging.Logger:
     logger = logging.getLogger("telegram_media")
-    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG if verbose_private else logging.INFO)
 
     if logger.handlers:
         logger.handlers.clear()
@@ -46,5 +47,14 @@ def setup_logger(config: Config) -> logging.Logger:
     file_handler = logging.FileHandler(config.app.log_directory / "app.log", encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+
+    # Keep third-party logger levels at WARNING or higher
+    for logger_name in (
+        "urllib3",
+        "httpx",
+        "telegram",
+        "asyncio",
+    ):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
     return logger

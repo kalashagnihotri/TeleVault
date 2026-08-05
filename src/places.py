@@ -33,9 +33,9 @@ class PlaceResolver:
                                 max_lon=item["max_lon"],
                             )
                         )
-                logger.info(f"Loaded {len(self.places)} custom offline places.")
+                logger.info("Loaded %s custom offline places.", len(self.places))
             except Exception as e:
-                logger.error(f"Failed to load places config from {config_path}: {e}")
+                logger.error("Failed to load places config from %r: %s", str(config_path), e)
 
     def resolve(self, lat: float | None, lon: float | None) -> str:
         if lat is None or lon is None:

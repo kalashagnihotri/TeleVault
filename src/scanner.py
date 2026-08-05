@@ -16,12 +16,14 @@ from src.metadata_image import extract_image_metadata
 from src.metadata_video import extract_video_metadata
 from src.routing import choose_topic, RouteInput
 from src.captions import build_caption
+from src.logging_utils import RuntimeOptions, ProcessingStage, safe_candidate_id, log_private
 
 class QueueScanner:
-    def __init__(self, config: Config, db: ArchiveDatabase, logger: logging.Logger) -> None:
+    def __init__(self, config: Config, db: ArchiveDatabase, logger: logging.Logger, opts: RuntimeOptions | None = None) -> None:
         self.config = config
         self.db = db
         self.logger = logger
+        self.opts = opts or RuntimeOptions()
         
         self.queue_dirs = [
             self.config.queue.incoming_images,
@@ -52,14 +54,15 @@ class QueueScanner:
                     if stat.st_size > 0:
                         candidates_initial[path] = (stat.st_size, stat.st_mtime_ns)
                 except OSError as e:
-                    self.logger.warning(f"Could not stat discovered file {path.name}: {e}")
+                    self.logger.warning("Could not stat a discovered file: error=%s", type(e).__name__)
+                    log_private(self.logger, self.opts.verbose_private, "Stat error on path=%r", str(path), exc_info=True)
 
         if not candidates_initial:
             self.logger.info("Finished queue scan.")
             return []
 
         if self.config.queue.stable_seconds > 0:
-            self.logger.info(f"Waiting {self.config.queue.stable_seconds}s for files to stabilize...")
+            self.logger.info("Waiting %ss for files to stabilize...", self.config.queue.stable_seconds)
             time.sleep(self.config.queue.stable_seconds)
 
         processed_candidates = []
@@ -70,26 +73,29 @@ class QueueScanner:
             try:
                 curr_stat = path.stat()
             except OSError:
-                self.logger.warning(f"File disappeared before processing: {path.name}")
+                self.logger.warning("A file disappeared before processing")
+                log_private(self.logger, self.opts.verbose_private, "File disappeared: %r", str(path))
                 continue
 
             if curr_stat.st_size == prev_size and curr_stat.st_mtime_ns == prev_time:
                 try:
                     with path.open("rb"):
                         pass
-                    candidate = self.process_file(path, curr_stat.st_size, curr_stat.st_mtime_ns)
+                    candidate = self.process_file(path, curr_stat.st_size, curr_stat.st_mtime_ns, fallback_index=len(processed_candidates) + 1)
                     if candidate:
                         processed_candidates.append(candidate)
                 except OSError as e:
-                    self.logger.warning(f"File not readable, skipping: {path.name} ({e})")
+                    self.logger.warning("A file is not readable, skipping: error=%s", type(e).__name__)
+                    log_private(self.logger, self.opts.verbose_private, "File not readable path=%r", str(path), exc_info=True)
             else:
-                self.logger.warning(f"File not stable, skipping for now: {path.name}")
+                self.logger.warning("A file is not stable, skipping for now")
+                log_private(self.logger, self.opts.verbose_private, "File not stable path=%r", str(path))
 
         self.logger.info("Finished queue scan.")
         return processed_candidates
 
-    def process_file(self, path: Path, size_bytes: int, modified_ns: int) -> MediaCandidate | None:
-        self.logger.info(f"Discovered candidate: {path.name}")
+    def process_file(self, path: Path, size_bytes: int, modified_ns: int, fallback_index: int = 1) -> MediaCandidate | None:
+        # Discovered logged after hashing now
 
         ext = path.suffix.lower()
         if ext in {".jpg", ".jpeg", ".png", ".webp"}:
@@ -109,11 +115,15 @@ class QueueScanner:
         try:
             digest = sha256_file(candidate.path)
         except Exception as e:
-            self.logger.error(f"Failed to hash {candidate.path.name}: {e}")
+            candidate_id = safe_candidate_id(None, fallback_number=fallback_index)
+            self.logger.error("Candidate [%s] failed: stage=%s error=%s", candidate_id, ProcessingStage.HASH.value, type(e).__name__)
+            log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private HASH failure: path=%r", candidate_id, str(path), exc_info=True)
             return None
 
         candidate.sha256 = digest
-        short_hash = digest[:8]
+        short_hash = safe_candidate_id(digest)
+        self.logger.info("Discovered candidate [%s]", short_hash)
+        log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private source: filename=%r path=%r full_sha256=%s", short_hash, path.name, str(path), digest)
         timestamp = datetime.now(timezone.utc).isoformat()
         
         meta = self._extract_metadata(candidate)
@@ -128,18 +138,18 @@ class QueueScanner:
             candidate.is_duplicate = True
             candidate.media_id = existing["id"]
             if self.config.app.dry_run:
-                self.logger.info(f"[DRY RUN] Hash {digest} already in database (state: {existing['state']})")
+                self.logger.info("[DRY RUN] Candidate [%s] already in database (state: %s)", short_hash, existing['state'])
                 gps_str = f"Lat: {round(meta.latitude, 4)}, Lon: {round(meta.longitude, 4)}" if meta.has_gps else "None"
-                self.logger.info(f"[DRY RUN] Metadata -> GPS present: {meta.has_gps}, Coords: {gps_str}, Location: {meta.location_label}, Route: {topic}")
+                self.logger.info("[DRY RUN] Candidate [%s] metadata -> GPS present: %s, Coords: %s, Location: %s, Route: %s", short_hash, meta.has_gps, gps_str, meta.location_label, topic)
                 return candidate
             else:
-                self.logger.info(f"Duplicate hash detected, already in database: {digest}")
+                self.logger.info("Candidate [%s] duplicate hash detected, already in database", short_hash)
                 return candidate
 
         if self.config.app.dry_run:
-            self.logger.info(f"[DRY RUN] Would reserve hash {digest} for {candidate.path.name}")
+            self.logger.info("[DRY RUN] Would reserve candidate [%s]", short_hash)
             gps_str = f"Lat: {round(meta.latitude, 4)}, Lon: {round(meta.longitude, 4)}" if meta.has_gps else "None"
-            self.logger.info(f"[DRY RUN] Metadata -> GPS present: {meta.has_gps}, Coords: {gps_str}, Location: {meta.location_label}, Route: {topic}")
+            self.logger.info("[DRY RUN] Candidate [%s] metadata -> GPS present: %s, Coords: %s, Location: %s, Route: %s", short_hash, meta.has_gps, gps_str, meta.location_label, topic)
             return candidate
 
         media_id = self.db.reserve_media(
@@ -155,12 +165,12 @@ class QueueScanner:
         )
 
         if media_id is None:
-            self.logger.info(f"Duplicate hash detected, already in database: {digest}")
+            self.logger.info("Candidate [%s] duplicate hash detected, already in database", short_hash)
             candidate.is_duplicate = True
             return candidate
             
         candidate.media_id = media_id
-        self.logger.info(f"Reserved media {media_id}. Extracting metadata...")
+        self.logger.info("Candidate [%s] reserved as media %s. Extracting metadata...", short_hash, media_id)
         
         caption = build_caption(
             date_text=meta.date_taken or "Unknown Date",
@@ -183,16 +193,16 @@ class QueueScanner:
             state="READY_TO_UPLOAD",
             timestamp=datetime.now(timezone.utc).isoformat()
         )
-        self.logger.info(f"Media {media_id} metadata and routing complete. State: READY_TO_UPLOAD.")
+        self.logger.info("Candidate [%s] metadata and routing complete. State: READY_TO_UPLOAD.", short_hash)
         return candidate
 
     def _extract_metadata(self, candidate: MediaCandidate):
         if candidate.media_type == "image":
-            meta = extract_image_metadata(candidate.path)
+            meta = extract_image_metadata(candidate.path, opts=self.opts)
         elif candidate.media_type == "video":
-            meta = extract_video_metadata(candidate.path)
+            meta = extract_video_metadata(candidate.path, opts=self.opts)
         else:
-            meta = extract_image_metadata(candidate.path) # fallback
+            meta = extract_image_metadata(candidate.path, opts=self.opts) # fallback
             
         meta.location_label = self.place_resolver.resolve(meta.latitude, meta.longitude)
         

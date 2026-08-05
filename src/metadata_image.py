@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from src.logging_utils import RuntimeOptions, log_private
 from datetime import datetime
 from pathlib import Path
 
@@ -83,6 +84,8 @@ def extract_image_metadata(path: Path) -> MetadataResult:
                     result.has_gps = True
 
     except Exception as e:
-        logger.warning(f"Failed to extract image metadata for {path.name}: {e}")
+        logger.warning("Failed to extract image metadata: error=%s", type(e).__name__)
+        if opts:
+            log_private(logger, opts.verbose_private, "Failed to extract image metadata path=%r", str(path), exc_info=True)
 
     return result

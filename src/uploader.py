@@ -9,16 +9,18 @@ from src.database import ArchiveDatabase
 from src.telegram_client import TelegramClient
 from src.preview import generate_image_preview, generate_video_thumbnail
 from src.captions import build_caption
+from src.logging_utils import RuntimeOptions, ProcessingStage, log_private
 
 class ConfigurationError(Exception):
     pass
 
 class ArchiveUploader:
-    def __init__(self, config: Config, db: ArchiveDatabase, telegram: TelegramClient, logger: logging.Logger):
+    def __init__(self, config: Config, db: ArchiveDatabase, telegram: TelegramClient, logger: logging.Logger, opts: RuntimeOptions | None = None):
         self.config = config
         self.db = db
         self.telegram = telegram
         self.logger = logger
+        self.opts = opts or RuntimeOptions()
         self.cache_dir = self.config.app.cache_dir if hasattr(self.config.app, "cache_dir") else self.config.app.cache_directory
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -35,10 +37,12 @@ class ArchiveUploader:
             try:
                 await self._process_media(media)
             except ConfigurationError as e:
-                self.logger.error(f"Global configuration error: {e}. Stopping uploads.")
+                self.logger.error("Global configuration error: %s. Stopping uploads.", type(e).__name__)
                 break
             except Exception as e:
-                self.logger.exception(f"Unexpected error processing media {media['id']}: {e}")
+                short_hash = media.get("short_hash", str(media["id"]))
+                self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, ProcessingStage.UPLOAD.value, type(e).__name__)
+                log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private upload error", short_hash, exc_info=True)
                 
         self.logger.info("Finished uploader.")
 
@@ -108,7 +112,8 @@ class ArchiveUploader:
     async def _handle_preview(self, media, force_original_only: bool) -> None:
         size_limit_error = self._check_size_limit(media["size_bytes"])
         if size_limit_error:
-            self.logger.info(f"Media {media['id']} fails size limits: {size_limit_error}")
+            short_hash = media.get("short_hash", str(media["id"]))
+            self.logger.info("Candidate [%s] fails size limits: %s", short_hash, size_limit_error)
             if not self.config.app.dry_run:
                 self.db.update_state(media["id"], size_limit_error, datetime.now(timezone.utc).isoformat())
             return
@@ -124,7 +129,8 @@ class ArchiveUploader:
                 preview_success = generate_video_thumbnail(original_path, preview_path)
 
         if not preview_success:
-            self.logger.info(f"Preview generation failed or skipped for {media['id']}. Falling back to original only.")
+            short_hash = media.get("short_hash", str(media["id"]))
+            self.logger.info("Candidate [%s] preview generation failed or skipped. Falling back to original only.", short_hash)
             await self._handle_original(media, has_preview=False)
             return
 
@@ -144,7 +150,8 @@ class ArchiveUploader:
 
         now = datetime.now(timezone.utc).isoformat()
         if self.config.app.dry_run:
-            self.logger.info(f"[DRY RUN] Would send preview for {media['id']} to {media['group_id']}/{media['topic_id']}")
+            short_hash = media.get("short_hash", str(media["id"]))
+            self.logger.info("[DRY RUN] Would send preview for candidate [%s]", short_hash)
             if preview_path.exists():
                 preview_path.unlink()
             return
@@ -176,7 +183,8 @@ class ArchiveUploader:
             await self._handle_original(media_dict, has_preview=True)
             
         except asyncio.TimeoutError:
-            self.logger.warning(f"Timeout uploading preview for {media['id']}")
+            short_hash = media.get("short_hash", str(media["id"]))
+            self.logger.warning("Candidate [%s] preview timeout", short_hash)
             now = datetime.now(timezone.utc).isoformat()
             self.db.finish_upload_attempt_error(
                 media["id"], attempt_id, "NEEDS_REVIEW", "timeout", None,
@@ -185,7 +193,9 @@ class ArchiveUploader:
         except RuntimeError as e:
             self._handle_api_error(e, media["id"], attempt_id, "preview", "READY_TO_UPLOAD")
         except Exception as e:
-            self.logger.error(f"Error uploading preview for {media['id']}: {e}")
+            short_hash = media.get("short_hash", str(media["id"]))
+            self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, ProcessingStage.UPLOAD.value, type(e).__name__)
+            log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private preview upload error", short_hash, exc_info=True)
             now = datetime.now(timezone.utc).isoformat()
             self.db.finish_upload_attempt_error(
                 media["id"], attempt_id, "NEEDS_REVIEW", "error", None,
@@ -202,7 +212,8 @@ class ArchiveUploader:
         
         now = datetime.now(timezone.utc).isoformat()
         if self.config.app.dry_run:
-            self.logger.info(f"[DRY RUN] Would send original for {media['id']} (reply_to={reply_to})")
+            short_hash = media.get("short_hash", str(media["id"]))
+            self.logger.info("[DRY RUN] Would send original for candidate [%s] (reply_to=%s)", short_hash, reply_to)
             return
 
         attempt_type = "original" if has_preview else "original_only"
@@ -245,7 +256,8 @@ class ArchiveUploader:
                 str(result.message_id), file_id, now, is_preview=False
             )
         except asyncio.TimeoutError:
-            self.logger.warning(f"Timeout uploading original for {media['id']}")
+            short_hash = media.get("short_hash", str(media["id"]))
+            self.logger.warning("Candidate [%s] original timeout", short_hash)
             now = datetime.now(timezone.utc).isoformat()
             self.db.finish_upload_attempt_error(
                 media["id"], attempt_id, "NEEDS_REVIEW", "timeout", None,
@@ -255,7 +267,9 @@ class ArchiveUploader:
             fallback = "PREVIEW_CONFIRMED" if has_preview else "READY_TO_UPLOAD"
             self._handle_api_error(e, media["id"], attempt_id, attempt_type, fallback)
         except Exception as e:
-            self.logger.error(f"Error uploading original for {media['id']}: {e}")
+            short_hash = media.get("short_hash", str(media["id"]))
+            self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, ProcessingStage.UPLOAD.value, type(e).__name__)
+            log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private original upload error", short_hash, exc_info=True)
             now = datetime.now(timezone.utc).isoformat()
             self.db.finish_upload_attempt_error(
                 media["id"], attempt_id, "NEEDS_REVIEW", "error", None,

@@ -10,6 +10,7 @@ from uuid import uuid4
 from src.config import Config
 from src.database import ArchiveDatabase
 from src.hashing import sha256_file
+from src.logging_utils import RuntimeOptions, ProcessingStage, log_private, safe_candidate_id
 
 
 class CleanupError(Exception):
@@ -17,11 +18,12 @@ class CleanupError(Exception):
 
 
 class ArchiveCleanup:
-    def __init__(self, config: Config, db: ArchiveDatabase, logger: logging.Logger):
+    def __init__(self, config: Config, db: ArchiveDatabase, logger: logging.Logger, opts: RuntimeOptions | None = None):
         self.config = config
         self.db = db
         self.logger = logger
         self._dry_run = config.app.dry_run
+        self.opts = opts or RuntimeOptions()
 
     def reconcile_in_progress(self) -> None:
         if self._dry_run:
@@ -32,7 +34,7 @@ class ArchiveCleanup:
         if not in_progress:
             return
 
-        self.logger.info(f"Reconciling {len(in_progress)} IN_PROGRESS cleanups from a previous crash.")
+        self.logger.info("Reconciling %s IN_PROGRESS cleanups from a previous crash.", len(in_progress))
         
         now = datetime.now(timezone.utc).isoformat()
         
@@ -116,7 +118,7 @@ class ArchiveCleanup:
         if not candidates:
             return
             
-        self.logger.info(f"Found {len(candidates)} cleanup candidates.")
+        self.logger.info("Found %s cleanup candidates.", len(candidates))
         
         for candidate in candidates:
             self._process_candidate(candidate)
@@ -130,32 +132,35 @@ class ArchiveCleanup:
         now = datetime.now(timezone.utc).isoformat()
         
         if not source_path.is_file():
-            self.logger.warning(f"Source file missing for {mid}: {source_path}")
+            self.logger.warning("Candidate [%s] source file missing", short_hash)
+            log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private missing source path: %r", short_hash, str(source_path))
             self.db.finish_cleanup_attempt(mid, None, "ERROR", "SOURCE_MISSING", "missing", "Source file not found")
             return
             
         # Hash verification
         actual_hash = sha256_file(source_path)
         if actual_hash != expected_hash:
-            self.logger.warning(f"Hash mismatch for {mid}. Expected {expected_hash}, got {actual_hash}")
+            self.logger.warning("Candidate [%s] hash mismatch during cleanup", short_hash)
+            log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private hash mismatch: expected %s, got %s", short_hash, expected_hash, actual_hash)
             self.db.finish_cleanup_attempt(mid, None, "ERROR", "SOURCE_CHANGED", "hash_mismatch", "File content changed")
             return
             
         if self.config.cleanup.mode == "move":
             self._do_move(mid, source_path, original_filename, expected_hash, short_hash, actual_hash)
         elif self.config.cleanup.mode == "delete":
-            self._do_delete(mid, source_path, expected_hash)
+            self._do_delete(mid, short_hash, source_path, expected_hash)
         else:
-            self.logger.error(f"Unknown cleanup mode: {self.config.cleanup.mode}")
+            self.logger.error("Candidate [%s] unknown cleanup mode: %s", short_hash, self.config.cleanup.mode)
             
-    def _do_delete(self, mid: int, source_path: Path, expected_hash: str) -> None:
+    def _do_delete(self, mid: int, short_hash: str, source_path: Path, expected_hash: str) -> None:
         if not self.config.cleanup.confirm_permanent_delete:
             self.logger.error("Deletion rejected: confirm_permanent_delete is false")
             return
             
         now = datetime.now(timezone.utc).isoformat()
         if self._dry_run:
-            self.logger.info(f"DRY RUN: Would delete {source_path}")
+            self.logger.info("[DRY RUN] Would delete candidate [%s]", short_hash)
+            log_private(self.logger, self.opts.verbose_private, "[DRY RUN] Candidate [%s] private path to delete: %r", short_hash, str(source_path))
             return
             
         attempt_id = self.db.start_cleanup_attempt(mid, "delete", str(source_path), None, now)
@@ -181,25 +186,26 @@ class ArchiveCleanup:
                 dest_hash = sha256_file(final_dest)
                 if dest_hash == expected_hash:
                     # Same hash, valid copy
-                    self._remove_source_for_existing_dest(mid, source_path, final_dest)
+                    self._remove_source_for_existing_dest(mid, short_hash, source_path, final_dest)
                     return
             
             # Different hash or directory, fallback to short_hash
             final_dest = dest_dir / f"{final_dest.stem}_{short_hash}{final_dest.suffix}"
             if final_dest.exists():
                 if final_dest.is_file() and sha256_file(final_dest) == expected_hash:
-                    self._remove_source_for_existing_dest(mid, source_path, final_dest)
+                    self._remove_source_for_existing_dest(mid, short_hash, source_path, final_dest)
                     return
                 # Still collision, use full hash
                 final_dest = dest_dir / f"{final_dest.stem}_{expected_hash}{final_dest.suffix}"
                 if final_dest.exists():
-                    self.logger.error(f"Cannot resolve filename collision for {mid}")
+                    self.logger.error("Candidate [%s] cannot resolve filename collision", short_hash)
                     self.db.finish_cleanup_attempt(mid, None, "ERROR", "FAILED", "collision", "Could not resolve destination filename")
                     return
                     
         now = datetime.now(timezone.utc).isoformat()
         if self._dry_run:
-            self.logger.info(f"DRY RUN: Would move {source_path} to {final_dest}")
+            self.logger.info("[DRY RUN] Would move candidate [%s]", short_hash)
+            log_private(self.logger, self.opts.verbose_private, "[DRY RUN] Candidate [%s] private move: %r to %r", short_hash, str(source_path), str(final_dest))
             return
             
         attempt_id = self.db.start_cleanup_attempt(mid, "move", str(source_path), str(final_dest), now)
@@ -230,10 +236,11 @@ class ArchiveCleanup:
             now = datetime.now(timezone.utc).isoformat()
             self.db.finish_cleanup_attempt(mid, attempt_id, "ERROR", "FAILED", "move_error", str(e), now)
 
-    def _remove_source_for_existing_dest(self, mid: int, source_path: Path, dest_path: Path) -> None:
+    def _remove_source_for_existing_dest(self, mid: int, short_hash: str, source_path: Path, dest_path: Path) -> None:
         now = datetime.now(timezone.utc).isoformat()
         if self._dry_run:
-            self.logger.info(f"DRY RUN: Would remove source {source_path} since {dest_path} matches hash")
+            self.logger.info("[DRY RUN] Would remove source for candidate [%s] since destination matches hash", short_hash)
+            log_private(self.logger, self.opts.verbose_private, "[DRY RUN] Candidate [%s] private remove source %r since dest %r matches hash", short_hash, str(source_path), str(dest_path))
             return
             
         attempt_id = self.db.start_cleanup_attempt(mid, "move_collision", str(source_path), str(dest_path), now)

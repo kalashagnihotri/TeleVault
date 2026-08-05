@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import logging
 
 from sklearn.datasets import fetch_lfw_people
 
@@ -20,6 +21,7 @@ from src.config import load_config, Config
 from src.face_engine import Cv2FaceEngine
 from src.image_utils import decode_image_with_exif
 from src.logger import setup_logger
+from src.logging_utils import RuntimeOptions, log_private
 
 PROJECT = Path(__file__).resolve().parent.parent
 
@@ -64,6 +66,8 @@ def select_negatives(
     seed: int,
     calibration_count: int,
     holdout_count: int,
+    logger: logging.Logger,
+    opts: RuntimeOptions
 ) -> tuple[list[SelectedSource], dict[str, Any]]:
     fetch_lfw_people(
         data_home=CACHE_DIR,
@@ -206,14 +210,16 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=20260805, help="Random seed")
     parser.add_argument("--calibration-count", type=int, default=25, help="Number of calibration negatives")
     parser.add_argument("--holdout-count", type=int, default=25, help="Number of holdout negatives")
+    parser.add_argument("--verbose-private", action="store_true", help="Enable private verbose logging")
     args = parser.parse_args()
     
     if args.calibration_count < 0 or args.holdout_count < 0 or (args.calibration_count + args.holdout_count) <= 0:
-        print("Error: Required counts must be positive.")
+        logger.info("Error: Required counts must be positive.")
         return 1
         
     config = load_config()
-    logger = setup_logger(config)
+    opts = RuntimeOptions(verbose_private=args.verbose_private)
+    logger = setup_logger(config, verbose_private=opts.verbose_private)
     engine = Cv2FaceEngine(config.faces, logger)
     engine.load_models()
     
@@ -224,9 +230,11 @@ def main() -> int:
             seed=args.seed,
             calibration_count=args.calibration_count,
             holdout_count=args.holdout_count,
+            logger=logger,
+            opts=opts
         )
     except InsufficientValidIdentitiesError as exc:
-        print("Unable to build the requested negative dataset.")
+        logger.info("Unable to build the requested negative dataset.")
         return 1
         
     calibration_sources = selected_sources[:args.calibration_count]
@@ -300,27 +308,27 @@ def main() -> int:
             shutil.rmtree(hld_backup_dir, ignore_errors=True)
             
     except Exception as e:
-        print("Failure during installation. Rolling back.")
+        logger.info("Failure during installation. Rolling back.")
         shutil.rmtree(cal_staging_dir, ignore_errors=True)
         shutil.rmtree(hld_staging_dir, ignore_errors=True)
         return 1
 
-    print("\n--- LFW Negative Dataset Report ---")
-    print(f"Random seed: {report['seed']}")
-    print(f"Identities available: {report['identities_available']}")
-    print(f"Identities examined: {report['identities_examined']}")
-    print(f"Identities exhausted: {report['identities_exhausted']}")
-    print(f"Images examined: {report['images_examined']}")
-    print(f"Decode errors: {report['decode_errors']}")
-    print(f"Zero detections: {report['zero_detections']}")
-    print(f"Tiny-only images: {report['tiny_only']}")
-    print(f"Multiple accepted-face images: {report['multiple_accepted_faces']}")
-    print(f"Duplicate-content images: {report['duplicate_content']}")
-    print(f"Alignment errors: {report['alignment_errors']}")
-    print(f"Embedding errors: {report['embedding_errors']}")
-    print(f"Accepted calibration identities: {report['accepted_calibration']}")
-    print(f"Accepted holdout identities: {report['accepted_holdout']}")
-    print("-----------------------------------")
+    logger.info("\n--- LFW Negative Dataset Report ---")
+    logger.info("Random seed: %s", report['seed'])
+    logger.info("Identities available: %s", report['identities_available'])
+    logger.info("Identities examined: %s", report['identities_examined'])
+    logger.info("Identities exhausted: %s", report['identities_exhausted'])
+    logger.info("Images examined: %s", report['images_examined'])
+    logger.info("Decode errors: %s", report['decode_errors'])
+    logger.info("Zero detections: %s", report['zero_detections'])
+    logger.info("Tiny-only images: %s", report['tiny_only'])
+    logger.info("Multiple accepted-face images: %s", report['multiple_accepted_faces'])
+    logger.info("Duplicate-content images: %s", report['duplicate_content'])
+    logger.info("Alignment errors: %s", report['alignment_errors'])
+    logger.info("Embedding errors: %s", report['embedding_errors'])
+    logger.info("Accepted calibration identities: %s", report['accepted_calibration'])
+    logger.info("Accepted holdout identities: %s", report['accepted_holdout'])
+    logger.info("-----------------------------------")
     
     return 0
 

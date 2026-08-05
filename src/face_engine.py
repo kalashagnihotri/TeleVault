@@ -92,7 +92,7 @@ class Cv2FaceEngine(FaceEngine):
             raise FaceEngineError("OpenCV is not installed or available")
 
         if not cv2.__version__.startswith("4."):
-            self.logger.warning(f"Unexpected OpenCV version: {cv2.__version__}, expected 4.x")
+            self.logger.warning("Unexpected OpenCV version: %s, expected 4.x", cv2.__version__)
 
         detector_path = self.config.model_root / self.config.detector_model
         recognizer_path = self.config.model_root / self.config.recognizer_model
@@ -107,10 +107,10 @@ class Cv2FaceEngine(FaceEngine):
 
         # For tests, we mock out this check or use dummy models, but in prod we warn
         if det_hash != self.DETECTOR_MANIFEST.sha256:
-            self.logger.error(f"Detector model hash mismatch! Expected {self.DETECTOR_MANIFEST.sha256}, got {det_hash}")
+            self.logger.error("Detector model hash mismatch! Expected %s, got %s", self.DETECTOR_MANIFEST.sha256, det_hash)
             raise FaceEngineError("Detector model hash mismatch")
         if rec_hash != self.RECOGNIZER_MANIFEST.sha256:
-            self.logger.error(f"Recognizer model hash mismatch! Expected {self.RECOGNIZER_MANIFEST.sha256}, got {rec_hash}")
+            self.logger.error("Recognizer model hash mismatch! Expected %s, got %s", self.RECOGNIZER_MANIFEST.sha256, rec_hash)
             raise FaceEngineError("Recognizer model hash mismatch")
             
         self.detector_hash = det_hash

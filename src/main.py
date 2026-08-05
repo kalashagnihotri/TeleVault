@@ -14,11 +14,13 @@ from src.scanner import QueueScanner
 from src.telegram_client import TelegramClient
 from src.uploader import ArchiveUploader
 from src.cleanup import ArchiveCleanup
+from src.logging_utils import RuntimeOptions
 
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Telegram Media Archive")
     parser.add_argument("--dry-run", action="store_true", help="Run without modifying database or moving files")
     parser.add_argument("--hash-file", type=Path, help="Only hash a specific file and exit")
+    parser.add_argument("--verbose-private", action="store_true", help="Enable private data logging at DEBUG level")
     args = parser.parse_args()
 
     if args.hash_file:
@@ -35,20 +37,21 @@ async def main() -> int:
     if args.dry_run:
         config.app.dry_run = True
 
-    logger = setup_logger(config)
+    opts = RuntimeOptions(verbose_private=args.verbose_private)
+    logger = setup_logger(config, verbose_private=opts.verbose_private)
     
     if config.app.dry_run:
         logger.info("Starting in DRY RUN mode. No database modifications will occur.")
     else:
         logger.info("Starting in LIVE mode.")
         
-    logger.info(f"Python Executable: {sys.executable}")
-    logger.info(f"Python Version: {sys.version.split()[0]}")
+    logger.info("Python Executable: %s", sys.executable)
+    logger.info("Python Version: %s", sys.version.split()[0])
     
     try:
         from src.face_engine import OPENCV_AVAILABLE, cv2, Cv2FaceEngine
         if OPENCV_AVAILABLE:
-            logger.info(f"OpenCV Version: {cv2.__version__}")
+            logger.info("OpenCV Version: %s", cv2.__version__)
         else:
             logger.info("OpenCV: unavailable")
     except ImportError:
@@ -66,11 +69,11 @@ async def main() -> int:
                 engine = Cv2FaceEngine(config=config.faces, logger=logger)
                 engine.load_models()
                 face_engine_loaded = True
-                logger.info(f"Detector: {Cv2FaceEngine.DETECTOR_MANIFEST.filename} (v{Cv2FaceEngine.DETECTOR_MANIFEST.version}) SHA256: {engine.detector_hash}")
-                logger.info(f"Recognizer: {Cv2FaceEngine.RECOGNIZER_MANIFEST.filename} (v{Cv2FaceEngine.RECOGNIZER_MANIFEST.version}) SHA256: {engine.recognizer_hash}")
-                logger.info(f"Model Identity: {engine.model_identity()}")
+                logger.info("Detector: %s (v%s) SHA256: %s", Cv2FaceEngine.DETECTOR_MANIFEST.filename, Cv2FaceEngine.DETECTOR_MANIFEST.version, engine.detector_hash)
+                logger.info("Recognizer: %s (v%s) SHA256: %s", Cv2FaceEngine.RECOGNIZER_MANIFEST.filename, Cv2FaceEngine.RECOGNIZER_MANIFEST.version, engine.recognizer_hash)
+                logger.info("Model Identity: %s", engine.model_identity())
             except Exception as e:
-                logger.error(f"Configuration error: Face processing dependency unavailable or models missing: {e}")
+                logger.error("Configuration error: Face processing dependency unavailable or models missing: %s", type(e).__name__)
 
     application_run_started_at = datetime.now(timezone.utc)
     eligible_before = (application_run_started_at - timedelta(days=config.cleanup.backup_safety_days)).isoformat()
@@ -85,15 +88,15 @@ async def main() -> int:
         db.repair_legacy_routing(config)
         db.recover_failed_original_uploads()
 
-    cleanup_worker = ArchiveCleanup(config, db, logger)
+    cleanup_worker = ArchiveCleanup(config, db, logger, opts=opts)
     cleanup_worker.reconcile_in_progress()
 
-    scanner = QueueScanner(config, db, logger)
+    scanner = QueueScanner(config, db, logger, opts=opts)
     candidates = scanner.scan_once()
     
     if face_engine_loaded:
         from src.face_analysis import FaceAnalysisWorker
-        face_worker = FaceAnalysisWorker(config=config, database=db, engine=engine, logger=logger)
+        face_worker = FaceAnalysisWorker(config=config, database=db, engine=engine, logger=logger, opts=opts)
         if config.app.dry_run:
             face_worker.analyze_candidates(candidates)
         else:
@@ -101,7 +104,7 @@ async def main() -> int:
 
     if config.secrets.bot_token:
         telegram = TelegramClient(config.secrets.bot_token, "https://api.telegram.org")
-        uploader = ArchiveUploader(config, db, telegram, logger)
+        uploader = ArchiveUploader(config, db, telegram, logger, opts=opts)
         await uploader.upload_once()
     else:
         logger.warning("No Telegram bot token found. Skipping upload phase.")

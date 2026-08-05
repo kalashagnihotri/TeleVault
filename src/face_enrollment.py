@@ -32,14 +32,14 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
     try:
         engine = get_engine(config=config, logger=logger)
     except FaceEngineError as e:
-        logger.error(f"Enrollment failed: {e}")
+        logger.error("Enrollment failed: %s", e)
         return 1
         
     write_allowed = check_write_permission(args, config, logger)
     
     source_dir = Path(args.source)
     if not source_dir.is_dir():
-        logger.error(f"Source is not a directory: {source_dir}")
+        logger.error("Source is not a directory: %s", source_dir)
         return 1
         
     # Analyze in memory
@@ -52,7 +52,7 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
     for ext in [".jpg", ".jpeg", ".png", ".webp"]:
         for img_path in source_dir.rglob(f"*{ext}"):
             if not img_path.is_file() or img_path.is_symlink():
-                logger.warning(f"Skipping unsafe or non-regular file: {img_path}")
+                logger.warning("Skipping unsafe or non-regular file: %s", img_path)
                 continue
                 
             try:
@@ -65,13 +65,13 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
             if not str(img_path.resolve()).startswith(str(config.faces.reference_root.resolve())):
                 planned_rejected.append((str(img_path), "unknown", "OUTSIDE_ROOT", "Path outside reference root"))
                 logger.warning("Rejected reference: OUTSIDE_ROOT")
-                logger.debug(f"File outside reference root rejected: {img_path}")
+                logger.debug("File outside reference root rejected: %s", img_path)
                 fail_count += 1
                 continue
                 
             file_hash = sha256_file(img_path)
             if db.reference_exists(file_hash):
-                logger.debug(f"Skipping duplicate reference: {img_path}")
+                logger.debug("Skipping duplicate reference: %s", img_path)
                 continue
                 
             import cv2
@@ -79,7 +79,7 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
             if image is None:
                 planned_rejected.append((str(img_path), file_hash, "UNREADABLE", "OpenCV imread failed"))
                 logger.warning("Rejected reference: UNREADABLE")
-                logger.debug(f"Unreadable image: {img_path}")
+                logger.debug("Unreadable image: %s", img_path)
                 fail_count += 1
                 continue
                 
@@ -87,13 +87,13 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
             if len(faces) == 0:
                 planned_rejected.append((str(img_path), file_hash, "NO_FACE", "No face detected"))
                 logger.warning("Rejected reference: NO_FACE")
-                logger.debug(f"No face detected: {img_path}")
+                logger.debug("No face detected: %s", img_path)
                 fail_count += 1
                 continue
             if len(faces) > 1:
                 planned_rejected.append((str(img_path), file_hash, "MULTIPLE_FACES", "Multiple faces detected"))
                 logger.warning("Rejected reference: MULTIPLE_FACES")
-                logger.debug(f"Multiple faces detected: {img_path}")
+                logger.debug("Multiple faces detected: %s", img_path)
                 fail_count += 1
                 continue
                 
@@ -104,7 +104,7 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
             if w < config.faces.minimum_face_size_px or h < config.faces.minimum_face_size_px:
                 planned_rejected.append((str(img_path), file_hash, "TINY_FACE", f"Face {w}x{h} below minimum size"))
                 logger.warning("Rejected reference: TINY_FACE")
-                logger.debug(f"Tiny face: {img_path}")
+                logger.debug("Tiny face: %s", img_path)
                 fail_count += 1
                 continue
                 
@@ -114,7 +114,7 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
             except FaceEngineError as e:
                 planned_rejected.append((str(img_path), file_hash, "ENGINE_ERROR", str(e)))
                 logger.warning("Rejected reference: ENGINE_ERROR")
-                logger.debug(f"Engine error on {img_path}: {e}")
+                logger.debug("Engine error on %s: %s", img_path, e)
                 fail_count += 1
                 continue
                 
@@ -133,14 +133,14 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
             success_count += 1
 
     if success_count < config.faces.minimum_references_per_person:
-        logger.info(f"Insufficient accepted references: {success_count} found, {config.faces.minimum_references_per_person} required.")
+        logger.info("Insufficient accepted references: %s found, %s required.", success_count, config.faces.minimum_references_per_person)
         if write_allowed:
             return 1
         
     if not write_allowed:
         for i, ref in enumerate(planned_accepted):
-            logger.info(f"[DRY-RUN] Would accept reference {i+1} of {success_count}")
-        logger.info(f"Enrollment complete: accepted={success_count} rejected={fail_count}")
+            logger.info("[DRY-RUN] Would accept reference %s of %s", i+1, success_count)
+        logger.info("Enrollment complete: accepted=%s rejected=%s", success_count, fail_count)
         return 0
 
     if success_count < config.faces.minimum_references_per_person:
@@ -170,8 +170,8 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (person_id, ref["source_sha256"], ref["source_path"], ref["detector_confidence"], ref["face_width"], ref["face_height"], ref["quality_json"], ref["embedding_blob"], ref["embedding_dimension"], ref["model_identity"], now)
                 )
-                logger.info(f"Accepted reference {i+1} of {success_count}")
-                logger.debug(f"Enrolled {ref['source_path']} for {args.person_slug}")
+                logger.info("Accepted reference %s of %s", i+1, success_count)
+                logger.debug("Enrolled %s for %s", ref['source_path'], args.person_slug)
 
             # 3. insert rejected
             for img_path_str, file_hash, r_code, r_msg in planned_rejected:
@@ -182,28 +182,28 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
                     (person_id, file_hash, img_path_str, now, r_code, r_msg)
                 )
     except Exception as e:
-        logger.error(f"Enrollment transaction failed: {e}")
+        logger.error("Enrollment transaction failed: %s", e)
         return 1
 
-    logger.info(f"Enrollment complete: accepted={success_count} rejected={fail_count}")
+    logger.info("Enrollment complete: accepted=%s rejected=%s", success_count, fail_count)
     return 0
 
 def cmd_list(args, config, db: ArchiveDatabase, logger: logging.Logger):
     people = db.get_active_people()
     for p in people:
-        print(f"[{p['person_id']}] {p['person_slug']}: {p['display_name']}")
+        print("[%s] %s: %s", p['person_id'], p['person_slug'], p['display_name'])
     return 0
 
 def cmd_deactivate(args, config, db: ArchiveDatabase, logger: logging.Logger):
     write_allowed = check_write_permission(args, config, logger)
     if not write_allowed:
-        logger.info(f"[DRY-RUN] Would deactivate {args.person_slug}")
+        logger.info("[DRY-RUN] Would deactivate %s", args.person_slug)
         return 0
         
     if db.deactivate_person(args.person_slug):
-        logger.info(f"Deactivated person: {args.person_slug}")
+        logger.info("Deactivated person: %s", args.person_slug)
     else:
-        logger.warning(f"Person not found or already inactive: {args.person_slug}")
+        logger.warning("Person not found or already inactive: %s", args.person_slug)
     return 0
 
 def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
@@ -214,14 +214,14 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
     try:
         engine = get_engine(config=config, logger=logger)
     except FaceEngineError as e:
-        logger.error(f"Rebuild failed: {e}")
+        logger.error("Rebuild failed: %s", e)
         return 1
 
     write_allowed = check_write_permission(args, config, logger)
 
     person = db.find_person_by_slug(args.person_slug)
     if not person or not person["active"]:
-        logger.error(f"Person not found or inactive: {args.person_slug}")
+        logger.error("Person not found or inactive: %s", args.person_slug)
         return 1
         
     person_id = person["person_id"]
@@ -229,18 +229,18 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
     try:
         ref_root = config.faces.reference_root.resolve(strict=True)
     except Exception:
-        logger.error(f"Reference root does not exist: {config.faces.reference_root}")
+        logger.error("Reference root does not exist: %s", config.faces.reference_root)
         return 1
         
     person_folder = Path(config.faces.reference_root) / args.person_slug
     try:
         person_folder = person_folder.resolve(strict=True)
     except Exception:
-        logger.error(f"Person folder does not exist: {person_folder}")
+        logger.error("Person folder does not exist: %s", person_folder)
         return 1
         
     if not person_folder.is_dir():
-        logger.error(f"Person folder is not a directory: {person_folder}")
+        logger.error("Person folder is not a directory: %s", person_folder)
         return 1
         
     if not str(person_folder).startswith(str(ref_root)):
@@ -260,7 +260,7 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
                 
     discovered_files.sort(key=lambda x: str(x).lower())
     
-    logger.info(f"Discovered references: {len(discovered_files)}")
+    logger.info("Discovered references: %s", len(discovered_files))
     
     planned_accepted = []
     planned_rejected = []
@@ -274,7 +274,7 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
         if file_hash in seen_hashes:
             planned_rejected.append((str(img_path), file_hash, "DUPLICATE_FILE", "Duplicate file in candidate set"))
             logger.warning("Rejected reference: DUPLICATE_FILE")
-            logger.debug(f"Duplicate file: {img_path}")
+            logger.debug("Duplicate file: %s", img_path)
             fail_count += 1
             continue
         seen_hashes.add(file_hash)
@@ -284,7 +284,7 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
         if image is None:
             planned_rejected.append((str(img_path), file_hash, "UNREADABLE", "OpenCV imread failed"))
             logger.warning("Rejected reference: UNREADABLE")
-            logger.debug(f"Unreadable image: {img_path}")
+            logger.debug("Unreadable image: %s", img_path)
             fail_count += 1
             continue
             
@@ -292,13 +292,13 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
         if len(faces) == 0:
             planned_rejected.append((str(img_path), file_hash, "NO_FACE", "No face detected"))
             logger.warning("Rejected reference: NO_FACE")
-            logger.debug(f"No face detected: {img_path}")
+            logger.debug("No face detected: %s", img_path)
             fail_count += 1
             continue
         if len(faces) > 1:
             planned_rejected.append((str(img_path), file_hash, "MULTIPLE_FACES", "Multiple faces detected"))
             logger.warning("Rejected reference: MULTIPLE_FACES")
-            logger.debug(f"Multiple faces detected: {img_path}")
+            logger.debug("Multiple faces detected: %s", img_path)
             fail_count += 1
             continue
             
@@ -309,7 +309,7 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
         if w < config.faces.minimum_face_size_px or h < config.faces.minimum_face_size_px:
             planned_rejected.append((str(img_path), file_hash, "TINY_FACE", f"Face {w}x{h} below minimum size"))
             logger.warning("Rejected reference: TINY_FACE")
-            logger.debug(f"Tiny face: {img_path}")
+            logger.debug("Tiny face: %s", img_path)
             fail_count += 1
             continue
             
@@ -319,7 +319,7 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
         except FaceEngineError as e:
             planned_rejected.append((str(img_path), file_hash, "ENGINE_ERROR", str(e)))
             logger.warning("Rejected reference: ENGINE_ERROR")
-            logger.debug(f"Engine error on {img_path}: {e}")
+            logger.debug("Engine error on %s: %s", img_path, e)
             fail_count += 1
             continue
             
@@ -338,13 +338,13 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
         success_count += 1
 
     if success_count < config.faces.minimum_references_per_person:
-        logger.info(f"Insufficient accepted references: {success_count} found, {config.faces.minimum_references_per_person} required.")
+        logger.info("Insufficient accepted references: %s found, %s required.", success_count, config.faces.minimum_references_per_person)
         if write_allowed:
             return 1
             
     if not write_allowed:
-        logger.info(f"Accepted references: {success_count}")
-        logger.info(f"Rejected references: {fail_count}")
+        logger.info("Accepted references: %s", success_count)
+        logger.info("Rejected references: %s", fail_count)
         return 0
 
     if success_count < config.faces.minimum_references_per_person:
@@ -402,11 +402,11 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
             logger.info("Rebuild committed successfully.")
             
     except Exception as e:
-        logger.error(f"Rebuild transaction failed: {e}")
+        logger.error("Rebuild transaction failed: %s", e)
         return 1
 
-    logger.info(f"Accepted references: {success_count}")
-    logger.info(f"Rejected references: {fail_count}")
+    logger.info("Accepted references: %s", success_count)
+    logger.info("Rejected references: %s", fail_count)
     return 0
 
 def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
@@ -423,7 +423,7 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
     try:
         engine = get_engine(config=config, logger=logger)
     except FaceEngineError as e:
-        logger.error(f"Calibration failed: {e}")
+        logger.error("Calibration failed: %s", e)
         return 1
         
     write_allowed = check_write_permission(args, config, logger)
@@ -464,13 +464,13 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
                     emb = engine.create_embedding(aligned)
                     embeddings.append((emb, str(path)))
             except Exception as e:
-                logger.debug(f"Failed to extract negative from {path}: {e}")
+                logger.debug("Failed to extract negative from %s: %s", path, e)
         return embeddings
 
     logger.info("Extracting negative embeddings...")
     calib_neg_embs = extract_negative_embeddings(calibration_negatives)
     holdout_neg_embs = extract_negative_embeddings(holdout_negatives)
-    logger.info(f"Found {len(calib_neg_embs)} calibration negative faces and {len(holdout_neg_embs)} holdout negative faces.")
+    logger.info("Found %s calibration negative faces and %s holdout negative faces.", len(calib_neg_embs), len(holdout_neg_embs))
     
     people = db.get_active_people()
     if len(people) < 2:
@@ -493,7 +493,7 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
         pid = p["person_id"]
         count = len(person_refs.get(pid, []))
         if count < config.faces.minimum_references_per_person:
-            logger.error(f"Person {p['person_slug']} has only {count} references (minimum {config.faces.minimum_references_per_person}).")
+            logger.error("Person %s has only %s references (minimum %s).", p['person_slug'], count, config.faces.minimum_references_per_person)
             return 1
             
     import hashlib
@@ -635,7 +635,7 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
                     # if agg_score is e.g. 0.8, it will easily pass the margin check.
                     if agg_score >= minimum_aggregate_margin:
                         holdout_false_matches += 1
-                        logger.error(f"Holdout failure: Unknown image {neg_path} matched Person {pid} with aggregate score {agg_score:.4f} and support {support_at_strong}")
+                        logger.error("Holdout failure: Unknown image %s matched Person %s with aggregate score %s and support %s", neg_path, pid, agg_score:.4f, support_at_strong)
         
     report = {
         "positive_aggregate_pairs": len(positive_aggregate_scores),
@@ -651,8 +651,8 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
         "highest_false_aggregate": highest_false_agg
     }
     
-    logger.info(f"Calibration proposed: Accept={aggregate_accept_threshold:.3f}, Review={aggregate_review_threshold:.3f}, Margin={minimum_aggregate_margin:.3f}")
-    logger.info(f"Holdout evaluation: {holdout_false_matches} false matches on {len(holdout_neg_embs)} faces.")
+    logger.info("Calibration proposed: Accept=%s, Review=%s, Margin=%s", aggregate_accept_threshold:.3f, aggregate_review_threshold:.3f, minimum_aggregate_margin:.3f)
+    logger.info("Holdout evaluation: %s false matches on %s faces.", holdout_false_matches, len(holdout_neg_embs))
     
     if holdout_false_matches > 0 and not args.allow_failed_holdout:
         logger.error("Calibration failed holdout evaluation. Refusing to activate.")

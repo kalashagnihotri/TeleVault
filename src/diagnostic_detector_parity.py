@@ -19,7 +19,7 @@ class DummyLogger(logging.Logger):
         self.setLevel(logging.CRITICAL)
 
 def _report(name, image, detector_dim, faces):
-    print("\n--- %s ---", name)
+    print("\n--- %s ---" % name)
     
     if faces is None:
         faces = []
@@ -31,17 +31,17 @@ def _report(name, image, detector_dim, faces):
         
     num_faces = len(faces)
     
-    print("ndarray shape: %s", image.shape)
-    print("dtype: %s", image.dtype)
-    print("C_CONTIGUOUS: %s", image.flags['C_CONTIGUOUS'])
-    print("detector input dimensions: %s", detector_dim)
-    print("detection matrix shape: (%s, %s)", num_faces, len(faces[0]) if num_faces > 0 else 0)
-    print("detection count: %s", num_faces)
+    print("ndarray shape: %s" % image.shape)
+    print("dtype: %s" % image.dtype)
+    print("C_CONTIGUOUS: %s" % image.flags['C_CONTIGUOUS'])
+    print("detector input dimensions: %s" % detector_dim)
+    print("detection matrix shape: (%s, %s)" % (num_faces, len(faces[0]) if num_faces > 0 else 0))
+    print("detection count: %s" % num_faces)
     
     for idx, face in enumerate(faces, 1):
         conf = float(face[-1])
         w, h = int(face[2]), int(face[3])
-        print("  Face %s: conf=%s, size=%sx%s", idx, conf:.4f, w, h)
+        print(f"  Face {idx}: conf={conf:.4f}, size={w}x{h}")
 
 def main():
     parser = argparse.ArgumentParser(description="Read-only face detector parity diagnostic")
@@ -58,7 +58,7 @@ def main():
     import cv2
     detector_path = config.faces.model_root / config.faces.detector_model
     if not detector_path.exists():
-        print("Error: Detector model missing at %s", detector_path)
+        print("Error: Detector model missing at %s" % detector_path)
         sys.exit(1)
         
     logger = DummyLogger()
@@ -68,7 +68,7 @@ def main():
     for source in args.source:
         source_path = Path(source)
         if not source_path.exists():
-            print("Error: %s does not exist.", source_path)
+            print("Error: %s does not exist." % source_path)
             sys.exit(1)
             
         try:
@@ -81,9 +81,9 @@ def main():
             images_info.append(img_info)
         except Exception as e:
             if args.verbose_private:
-                print("Failed to decode %s: %s", source_path.name, e)
+                print("Failed to decode %s: %s" % (source_path.name, e))
             else:
-                print("Failed to decode image: %s", e)
+                print("Failed to decode image: %s" % e)
             sys.exit(1)
             
     # Persistent Engine (C and D)
@@ -94,9 +94,9 @@ def main():
     
     for img_info in images_info:
         if args.verbose_private:
-            print("\n================ Image: %s ================", img_info['filename'])
+            print("\n================ Image: %s ================" % img_info['filename'])
         else:
-            print("\n================ Image Hash: %s ================", img_info['short_hash'])
+            print("\n================ Image Hash: %s ================" % img_info['short_hash'])
             
         raw_image = img_info["image"]
         
@@ -127,9 +127,9 @@ def main():
     
     for img_info in images_info:
         if args.verbose_private:
-            print("\n================ Image: %s ================", img_info['filename'])
+            print("\n================ Image: %s ================" % img_info['filename'])
         else:
-            print("\n================ Image Hash: %s ================", img_info['short_hash'])
+            print("\n================ Image Hash: %s ================" % img_info['short_hash'])
             
         raw_image = img_info["image"]
         image = np.asarray(raw_image)

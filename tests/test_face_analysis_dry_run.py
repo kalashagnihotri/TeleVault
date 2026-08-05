@@ -130,7 +130,8 @@ def test_dry_run_analysis_exception_produces_analysis_error(memory_db, mock_engi
     with patch("src.face_analysis.decode_image_with_exif", side_effect=lambda x: {"image": dummy_img}):
         mock_engine.detect_faces.side_effect = Exception("Crash")
         
-        worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
+        from src.logging_utils import RuntimeOptions
+        worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger, opts=RuntimeOptions(verbose_private=True))
         worker.analyze_candidates([c1])
         
         info_logs = [r.getMessage() for r in handler.records if r.levelno == logging.INFO]
@@ -138,7 +139,7 @@ def test_dry_run_analysis_exception_produces_analysis_error(memory_db, mock_engi
         debug_logs = [r.getMessage() for r in handler.records if r.levelno == logging.DEBUG]
         
         assert any("Candidate 1 [29c39a62]: decision=ANALYSIS_ERROR stage=DETECTION error=Exception" in log for log in info_logs)
-        assert any("Face analysis failed for candidate 29c39a62: stage=DETECTION error=Exception" in log for log in err_logs)
+        assert any("Candidate [29c39a62] failed: stage=DETECTION error=Exception" in log for log in err_logs)
         assert any(r.exc_info is not None and "Crash" in str(r.exc_info[1]) for r in handler.records if r.levelno == logging.DEBUG)
 
 def test_stale_calibration_produces_unknown_uncalibrated(memory_db, mock_engine_config, tmp_path):
@@ -163,7 +164,7 @@ def test_stale_calibration_produces_unknown_uncalibrated(memory_db, mock_engine_
         worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
         worker.analyze_candidates([c1])
         
-        logger.info.assert_any_call("Candidate 1 [abcxxxx]: faces=1, decision=UNKNOWN_UNCALIBRATED")
+        logger.info.assert_any_call("Candidate %s [%s]: faces=1, decision=%s", 1, "abcxxxx", "UNKNOWN_UNCALIBRATED")
 
 def test_dry_run_ignores_duplicates_and_videos(memory_db, mock_engine_config, tmp_path):
     c1 = MediaCandidate(path=tmp_path / "img1.jpg", media_type="image", size_bytes=100, modified_ns=0, is_duplicate=True)
@@ -175,7 +176,167 @@ def test_dry_run_ignores_duplicates_and_videos(memory_db, mock_engine_config, tm
     worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
     worker.analyze_candidates([c1, c2])
     
-    logger.info.assert_any_call("Face-analysis candidates: 0.")
+    logger.info.assert_any_call("Face-analysis candidates: %s.", 0)
+
+
+def test_uncalibrated_diagnostic_scores(memory_db, mock_engine_config, tmp_path):
+    c1 = MediaCandidate(path=tmp_path / "img1.jpg", media_type="image", size_bytes=100, modified_ns=0, sha256="abcxxxx")
+
+    logger = logging.getLogger("test_uncalibrated")
+    logger.addHandler(logging.NullHandler())
+    
+    mock_engine = MagicMock()
+    mock_engine.model_identity.return_value = "modelA"
+
+    dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
+    with patch("src.face_analysis.decode_image_with_exif", return_value={"image": dummy_img}):
+        mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
+        mock_engine.align_face.return_value = "aligned"
+        mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+
+        person_id = memory_db.get_or_create_person("person1", "Person 1")
+        memory_db.add_reference(person_id, "refhash", "ref.jpg", 0.99, 100, 100, "{}", np.ones(128, dtype=np.float32).tobytes(), 128, "modelA")
+        
+        # No calibration activated
+
+        mock_engine.compare_embeddings.return_value = 0.95
+
+        worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
+        worker.load_snapshots()
+        res = worker.analyze_image(dummy_img)
+
+        assert len(res.face_results) == 1
+        face = res.face_results[0]
+        
+        assert face["decision"] == "UNKNOWN_UNCALIBRATED"
+        assert face["best_person_id"] == person_id
+        assert face["best_score"] == 0.95
+        assert res.accepted_faces == 0
+        
+        # Ensure no database writes
+        with memory_db.connect() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM face_calibrations").fetchone()[0] == 0
+            # face_results are not written by FaceAnalysisWorker directly in this test, but just making sure
+
+
+def test_uncalibrated_diagnostic_scores(memory_db, mock_engine_config, tmp_path):
+    c1 = MediaCandidate(path=tmp_path / "img1.jpg", media_type="image", size_bytes=100, modified_ns=0, sha256="abcxxxx")
+
+    logger = logging.getLogger("test_uncalibrated")
+    logger.addHandler(logging.NullHandler())
+    
+    mock_engine = MagicMock()
+    mock_engine.model_identity.return_value = "modelA"
+
+    dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
+    with patch("src.face_analysis.decode_image_with_exif", return_value={"image": dummy_img}):
+        mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
+        mock_engine.align_face.return_value = "aligned"
+        mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+
+        person_id = memory_db.get_or_create_person("person1", "Person 1")
+        memory_db.add_reference(person_id, "refhash", "ref.jpg", 0.99, 100, 100, "{}", np.ones(128, dtype=np.float32).tobytes(), 128, "modelA")
+        
+        # No calibration activated
+
+        mock_engine.compare_embeddings.return_value = 0.95
+
+        worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
+        worker.load_snapshots()
+        res = worker.analyze_image(dummy_img)
+
+        assert len(res.face_results) == 1
+        face = res.face_results[0]
+        
+        assert face["decision"] == "UNKNOWN_UNCALIBRATED"
+        assert face["best_person_id"] == person_id
+        assert face["best_score"] == 0.95
+        assert res.accepted_faces == 0
+        
+        # Ensure no database writes
+        with memory_db.connect() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM face_calibrations").fetchone()[0] == 0
+            # face_results are not written by FaceAnalysisWorker directly in this test, but just making sure
+
+
+def test_uncalibrated_diagnostic_scores(memory_db, mock_engine_config, tmp_path):
+    c1 = MediaCandidate(path=tmp_path / "img1.jpg", media_type="image", size_bytes=100, modified_ns=0, sha256="abcxxxx")
+
+    logger = logging.getLogger("test_uncalibrated")
+    logger.addHandler(logging.NullHandler())
+    
+    mock_engine = MagicMock()
+    mock_engine.model_identity.return_value = "modelA"
+
+    dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
+    with patch("src.face_analysis.decode_image_with_exif", return_value={"image": dummy_img}):
+        mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
+        mock_engine.align_face.return_value = "aligned"
+        mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+
+        person_id = memory_db.get_or_create_person("person1", "Person 1")
+        memory_db.add_reference(person_id, "refhash", "ref.jpg", 0.99, 100, 100, "{}", np.ones(128, dtype=np.float32).tobytes(), 128, "modelA")
+        
+        # No calibration activated
+
+        mock_engine.compare_embeddings.return_value = 0.95
+
+        worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
+        worker.load_snapshots()
+        res = worker.analyze_image(dummy_img)
+
+        assert len(res.face_results) == 1
+        face = res.face_results[0]
+        
+        assert face["decision"] == "UNKNOWN_UNCALIBRATED"
+        assert face["best_person_id"] == person_id
+        assert face["best_score"] == 0.95
+        assert res.accepted_faces == 0
+        
+        # Ensure no database writes
+        with memory_db.connect() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM face_calibrations").fetchone()[0] == 0
+            # face_results are not written by FaceAnalysisWorker directly in this test, but just making sure
+
+
+def test_uncalibrated_diagnostic_scores(memory_db, mock_engine_config, tmp_path):
+    c1 = MediaCandidate(path=tmp_path / "img1.jpg", media_type="image", size_bytes=100, modified_ns=0, sha256="abcxxxx")
+
+    logger = logging.getLogger("test_uncalibrated")
+    logger.addHandler(logging.NullHandler())
+    
+    mock_engine = MagicMock()
+    mock_engine.model_identity.return_value = "modelA"
+
+    dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
+    with patch("src.face_analysis.decode_image_with_exif", return_value={"image": dummy_img}):
+        mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
+        mock_engine.align_face.return_value = "aligned"
+        mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+
+        person_id = memory_db.get_or_create_person("person1", "Person 1")
+        memory_db.add_reference(person_id, "refhash", "ref.jpg", 0.99, 100, 100, "{}", np.ones(128, dtype=np.float32).tobytes(), 128, "modelA")
+        
+        # No calibration activated
+
+        mock_engine.compare_embeddings.return_value = 0.95
+
+        worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
+        worker.load_snapshots()
+        res = worker.analyze_image(dummy_img)
+
+        assert len(res.face_results) == 1
+        face = res.face_results[0]
+        
+        assert face["decision"] == "UNKNOWN_UNCALIBRATED"
+        assert face["best_person_id"] == person_id
+        assert face["best_score"] == 0.95
+        assert res.accepted_faces == 0
+        
+        # Ensure no database writes
+        with memory_db.connect() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM face_calibrations").fetchone()[0] == 0
+            # face_results are not written by FaceAnalysisWorker directly in this test, but just making sure
 
 
 def test_uncalibrated_diagnostic_scores(memory_db, mock_engine_config, tmp_path):

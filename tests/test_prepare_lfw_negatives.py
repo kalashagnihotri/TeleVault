@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 import os
 import shutil
 import hashlib
@@ -64,7 +64,7 @@ def test_selection_disjoint_identities(mock_decode, mock_find, mock_fetch, mock_
     for i in range(10):
         create_identity(lfw_cache, f"person_{i}", 1)
         
-    selections, report = select_negatives(mock_config, mock_engine, seed=42, calibration_count=5, holdout_count=5)
+    selections, report = select_negatives(mock_config, mock_engine, seed=42, calibration_count=5, holdout_count=5, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
     
     cal_identities = {s.identity_key for s in selections[:5]}
     hld_identities = {s.identity_key for s in selections[5:]}
@@ -83,7 +83,7 @@ def test_every_selected_identity_is_unique(mock_decode, mock_find, mock_fetch, m
     for i in range(5):
         create_identity(lfw_cache, f"person_{i}", 2)
         
-    selections, report = select_negatives(mock_config, mock_engine, seed=42, calibration_count=2, holdout_count=2)
+    selections, report = select_negatives(mock_config, mock_engine, seed=42, calibration_count=2, holdout_count=2, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
     identities = [s.identity_key for s in selections]
     assert len(identities) == len(set(identities))
 
@@ -103,7 +103,7 @@ def test_reject_duplicate_hash(mock_decode, mock_find, mock_fetch, mock_config, 
     
     with pytest.raises(InsufficientValidIdentitiesError):
         # We need 4, but 3 of the 5 share the same hash, so only 3 unique valid identities exist.
-        select_negatives(mock_config, mock_engine, seed=42, calibration_count=2, holdout_count=2)
+        select_negatives(mock_config, mock_engine, seed=42, calibration_count=2, holdout_count=2, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
 
 @patch("scripts.prepare_lfw_negatives.fetch_lfw_people")
 @patch("scripts.prepare_lfw_negatives.find_lfw_root")
@@ -122,7 +122,7 @@ def test_selection_tries_later_images_on_failure(mock_decode, mock_find, mock_fe
     create_identity(lfw_cache, "person_2", 1)
     create_identity(lfw_cache, "person_3", 1)
     
-    selections, report = select_negatives(mock_config, mock_engine, seed=42, calibration_count=2, holdout_count=2)
+    selections, report = select_negatives(mock_config, mock_engine, seed=42, calibration_count=2, holdout_count=2, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
     assert len(selections) == 4
     # person_0 should still be selected because the second image succeeded
     assert any(s.identity_key == "person_0" for s in selections)
@@ -142,7 +142,7 @@ def test_reject_multiple_faces(mock_decode, mock_find, mock_fetch, mock_config, 
     create_identity(lfw_cache, "person_0", 1)
     
     with pytest.raises(InsufficientValidIdentitiesError):
-        select_negatives(mock_config, mock_engine, seed=42, calibration_count=1, holdout_count=0)
+        select_negatives(mock_config, mock_engine, seed=42, calibration_count=1, holdout_count=0, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
 
 @patch("scripts.prepare_lfw_negatives.fetch_lfw_people")
 @patch("scripts.prepare_lfw_negatives.find_lfw_root")
@@ -154,7 +154,7 @@ def test_reject_alignment_failure(mock_decode, mock_find, mock_fetch, mock_confi
     
     create_identity(lfw_cache, "person_0", 1)
     with pytest.raises(InsufficientValidIdentitiesError):
-        select_negatives(mock_config, mock_engine, seed=42, calibration_count=1, holdout_count=0)
+        select_negatives(mock_config, mock_engine, seed=42, calibration_count=1, holdout_count=0, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
 
 @patch("scripts.prepare_lfw_negatives.fetch_lfw_people")
 @patch("scripts.prepare_lfw_negatives.find_lfw_root")
@@ -166,7 +166,7 @@ def test_reject_embedding_failure(mock_decode, mock_find, mock_fetch, mock_confi
     
     create_identity(lfw_cache, "person_0", 1)
     with pytest.raises(InsufficientValidIdentitiesError):
-        select_negatives(mock_config, mock_engine, seed=42, calibration_count=1, holdout_count=0)
+        select_negatives(mock_config, mock_engine, seed=42, calibration_count=1, holdout_count=0, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
 
 @patch("scripts.prepare_lfw_negatives.fetch_lfw_people")
 @patch("scripts.prepare_lfw_negatives.find_lfw_root")
@@ -182,7 +182,7 @@ def test_tiny_background_faces_allowed(mock_decode, mock_find, mock_fetch, mock_
     ]
     
     create_identity(lfw_cache, "person_0", 1)
-    selections, report = select_negatives(mock_config, mock_engine, seed=42, calibration_count=1, holdout_count=0)
+    selections, report = select_negatives(mock_config, mock_engine, seed=42, calibration_count=1, holdout_count=0, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
     assert len(selections) == 1
 
 @patch("scripts.prepare_lfw_negatives.load_config")
@@ -250,9 +250,9 @@ def test_same_seed_same_selection(mock_decode, mock_find, mock_fetch, mock_confi
     for i in range(10):
         create_identity(lfw_cache, f"person_{i}", 1, content=str(i))
         
-    s1, _ = select_negatives(mock_config, mock_engine, seed=42, calibration_count=3, holdout_count=3)
-    s2, _ = select_negatives(mock_config, mock_engine, seed=42, calibration_count=3, holdout_count=3)
-    s3, _ = select_negatives(mock_config, mock_engine, seed=100, calibration_count=3, holdout_count=3)
+    s1, _ = select_negatives(mock_config, mock_engine, seed=42, calibration_count=3, holdout_count=3, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
+    s2, _ = select_negatives(mock_config, mock_engine, seed=42, calibration_count=3, holdout_count=3, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
+    s3, _ = select_negatives(mock_config, mock_engine, seed=100, calibration_count=3, holdout_count=3, logger=__import__('unittest.mock').mock.MagicMock(), opts=__import__('unittest.mock').mock.MagicMock())
     
     assert [s.identity_key for s in s1] == [s.identity_key for s in s2]
     assert [s.identity_key for s in s1] != [s.identity_key for s in s3]
@@ -450,7 +450,9 @@ def test_mocked_source_cache_remains_unchanged(mock_decode, mock_find, mock_fetc
     engine.align_face.return_value = "aligned"
     engine.create_embedding.return_value = MagicMock(size=128)
     
-    select_negatives(config, engine, seed=42, calibration_count=1, holdout_count=0)
+    logger = MagicMock()
+    opts = MagicMock()
+    select_negatives(config, engine, seed=42, calibration_count=1, holdout_count=0, logger=logger, opts=opts)
     
     assert (lfw_cache / "person_0" / "person_0_0000.jpg").read_bytes() == b"unchanged"
     assert (lfw_cache / "person_0" / "person_0_0000.jpg").stat().st_mtime == orig_stat.st_mtime
@@ -475,7 +477,9 @@ def test_different_seeds_produce_different_selections(mock_decode, mock_find, mo
     engine.align_face.return_value = "aligned"
     engine.create_embedding.return_value = MagicMock(size=128)
     
-    s1, _ = select_negatives(config, engine, seed=42, calibration_count=2, holdout_count=2)
-    s2, _ = select_negatives(config, engine, seed=100, calibration_count=2, holdout_count=2)
+    logger = MagicMock()
+    opts = MagicMock()
+    s1, _ = select_negatives(config, engine, seed=42, calibration_count=2, holdout_count=2, logger=logger, opts=opts)
+    s2, _ = select_negatives(config, engine, seed=100, calibration_count=2, holdout_count=2, logger=logger, opts=opts)
     
     assert [s.identity_key for s in s1] != [s.identity_key for s in s2]

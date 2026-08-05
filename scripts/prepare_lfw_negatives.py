@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import hashlib
@@ -214,7 +214,7 @@ def main() -> int:
     args = parser.parse_args()
     
     if args.calibration_count < 0 or args.holdout_count < 0 or (args.calibration_count + args.holdout_count) <= 0:
-        logger.info("Error: Required counts must be positive.")
+        print("Error: Required counts must be positive.")
         return 1
         
     config = load_config()

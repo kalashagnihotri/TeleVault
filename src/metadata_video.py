@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import json
 import logging
-from src.logging_utils import RuntimeOptions, log_private
 import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
+from src.logging_utils import RuntimeOptions, log_private
 from src.models import MetadataResult
 
 logger = logging.getLogger(__name__)
 
-def extract_video_metadata(path: Path) -> MetadataResult:
+def extract_video_metadata(path: Path, opts: Optional[RuntimeOptions] = None) -> MetadataResult:
     result = MetadataResult()
     try:
         cmd = [

@@ -39,7 +39,7 @@ def main():
     source_path = Path(args.source)
     
     if not source_path.exists():
-        print("Error: %s does not exist.", source_path)
+        print("Error: %s does not exist." % source_path)
         sys.exit(1)
         
     config = load_config()
@@ -60,21 +60,21 @@ def main():
     except Exception as e:
         logger.debug("Image decode traceback", exc_info=True)
         if args.verbose_private:
-            print("Failed to decode image %s: %s", source_path.name, e)
+            print("Failed to decode image %s: %s" % (source_path.name, e))
         else:
-            print("Failed to decode image: %s", e.__class__.__name__)
+            print("Failed to decode image: %s" % e.__class__.__name__)
         sys.exit(1)
         
     image = img_info["image"]
     
     print("--- Face Match Diagnostics ---")
     if args.verbose_private:
-        print("Source file: %s", source_path.name)
+        print("Source file: %s" % source_path.name)
     else:
         import hashlib
         with open(source_path, "rb") as f:
             short_hash = hashlib.sha256(f.read()).hexdigest()[:8]
-        print("Source file: %s", short_hash)
+        print("Source file: %s" % short_hash)
         
     print("Loading models and active calibration...")
     try:
@@ -86,9 +86,9 @@ def main():
     except Exception as e:
         logger.debug("Face diagnostic initialization traceback", exc_info=True)
         if args.verbose_private:
-            print("Failed to initialize face engine: %s", e)
+            print("Failed to initialize face engine: %s" % e)
         else:
-            print("Failed to initialize face engine: %s", e.__class__.__name__)
+            print("Failed to initialize face engine: %s" % e.__class__.__name__)
         sys.exit(1)
         
     try:
@@ -97,9 +97,9 @@ def main():
     except Exception as e:
         logger.debug("Database initialization traceback", exc_info=True)
         if args.verbose_private:
-            print("Failed to open diagnostic database: %s", e)
+            print("Failed to open diagnostic database: %s" % e)
         else:
-            print("Failed to open diagnostic database: %s", e.__class__.__name__)
+            print("Failed to open diagnostic database: %s" % e.__class__.__name__)
         sys.exit(1)
         
     worker = FaceAnalysisWorker(config, db, engine, logger)
@@ -112,42 +112,45 @@ def main():
     res = worker.analyze_image(image)
     
     completed_faces = res.accepted_faces + res.unknown_faces + res.processing_errors
-    print("\nCompleted faces: %s", completed_faces)
-    print("Accepted matches: %s", res.accepted_faces)
-    print("Unknown faces: %s", res.unknown_faces)
-    print("Ignored tiny: %s", res.ignored_tiny)
-    print("Errors: %s\n", res.processing_errors)
+    print("\nCompleted faces: %s" % completed_faces)
+    print("Accepted matches: %s" % res.accepted_faces)
+    print("Unknown faces: %s" % res.unknown_faces)
+    print("Ignored tiny: %s" % res.ignored_tiny)
+    print("Errors: %s\n" % res.processing_errors)
     
     accepted_boxes = []
     
     for face in res.face_results:
         print("-" * 50)
-        print("Face Index : %s", face.get('face_index'))
+        print("Face Index : %s" % face.get('face_index'))
         bb_json = face.get("bounding_box_json")
-        print("Bounding Box: %s", bb_json)
-        print("Confidence  : %s", face.get('detector_confidence'):.4f)
-        print("Decision    : %s", face.get('decision'))
+        print("Bounding Box: %s" % bb_json)
+        print(
+            f"Confidence  : "
+            f"{float(face.get('detector_confidence') or 0.0):.4f}"
+        )
+        print("Decision    : %s" % face.get('decision'))
         
         if "IGNORED" in face.get("decision", ""):
             print("Size Decision: Rejected (Too small)")
             continue
         elif "ERROR" in face.get("decision", ""):
-            print("Error Stage : %s", face.get('error_stage'))
-            print("Error Code  : %s", face.get('error_code'))
+            print("Error Stage : %s" % face.get('error_stage'))
+            print("Error Code  : %s" % face.get('error_code'))
             continue
         else:
             print("Size Decision: Accepted")
             
-        print("Best Person ID    : %s", face.get('best_person_id'))
+        print("Best Person ID    : %s" % face.get('best_person_id'))
         if face.get('best_score') is not None:
-            print("Best Score        : %s", face.get('best_score'):.4f)
-        print("Second Best Person: %s", face.get('second_best_person_id'))
+            print(f"Best Score        : {float(face.get('best_score') or 0.0):.4f}")
+        print("Second Best Person: %s" % face.get('second_best_person_id'))
         if face.get('second_best_score') is not None:
-            print("Second Best Score : %s", face.get('second_best_score'):.4f)
+            print(f"Second Best Score : {float(face.get('second_best_score') or 0.0):.4f}")
         
         if face.get('score_margin') is not None:
-            print("Score Margin      : %s", face.get('score_margin'):.4f)
-        print("Supporting Refs   : %s", face.get('supporting_reference_count'))
+            print(f"Score Margin      : {float(face.get('score_margin') or 0.0):.4f}")
+        print("Supporting Refs   : %s" % face.get('supporting_reference_count'))
         
         diag_data = face.get("diagnostic_data")
         if diag_data and diag_data.get("scores_by_person"):
@@ -160,11 +163,11 @@ def main():
                 
             print("\nAggregate person scores:")
             for pid, pscore in diag_data.get("person_aggregate_scores", {}).items():
-                print("  Person %s: %s", pid, pscore:.4f)
+                print(f"  Person {pid}: {float(pscore or 0.0):.4f}")
                 
             print("\nMaximum person scores:")
             for pid, pscore in diag_data.get("person_max_scores", {}).items():
-                print("  Person %s: %s", pid, pscore:.4f)
+                print(f"  Person {pid}: {float(pscore or 0.0):.4f}")
                 
         # Track boxes for overlap check
         if face.get("decision") == "KNOWN_MATCH":
@@ -182,7 +185,7 @@ def main():
                 iou = get_iou(accepted_boxes[i], accepted_boxes[j])
                 if iou > 0.5:
                     found_overlap = True
-                    print("WARNING: Face %s and Face %s have a strong overlap (IoU = %s). They may be duplicate detections of the same physical face.", accepted_boxes[i]['face_index'], accepted_boxes[j]['face_index'], iou:.4f)
+                    print(f"WARNING: Face {accepted_boxes[i]['face_index']} and Face {accepted_boxes[j]['face_index']} have a strong overlap (IoU = {iou:.4f}). They may be duplicate detections of the same physical face.")
         
         if not found_overlap:
             print("No strong overlaps found.")

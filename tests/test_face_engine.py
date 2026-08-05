@@ -145,7 +145,18 @@ def test_enrollment_aborts_on_hash_mismatch(mock_config, tmp_path):
         result = cmd_enroll(args, config=mock_config, db=db, logger=logger)
         
         assert result == 1
-        logger.error.assert_any_call("Enrollment failed: Detector model hash mismatch")
+        logger.error.assert_any_call(
+            "Enrollment failed: error=%s",
+            "FaceEngineError",
+        )
+        public_calls = [
+            str(call)
+            for call in logger.error.call_args_list
+        ]
+        assert not any(
+            "Detector model hash mismatch" in call
+            for call in public_calls
+        )
         db.get_or_create_person.assert_not_called()
         db.add_reference.assert_not_called()
         

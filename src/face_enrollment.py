@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 import logging
+from src.logging_utils import log_private
 
 from src.config import load_config
 from src.database import ArchiveDatabase
@@ -32,7 +33,13 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
     try:
         engine = get_engine(config=config, logger=logger)
     except FaceEngineError as e:
-        logger.error("Enrollment failed: %s", e)
+        logger.error("Enrollment failed: error=%s", type(e).__name__)
+        log_private(
+            logger,
+            getattr(args, "verbose_private", False),
+            "Enrollment private failure details",
+            exc_info=True,
+        )
         return 1
         
     write_allowed = check_write_permission(args, config, logger)
@@ -635,7 +642,19 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
                     # if agg_score is e.g. 0.8, it will easily pass the margin check.
                     if agg_score >= minimum_aggregate_margin:
                         holdout_false_matches += 1
-                        logger.error("Holdout failure: Unknown image %s matched Person %s with aggregate score %s and support %s", neg_path, pid, agg_score:.4f, support_at_strong)
+                        logger.error(
+                            "Holdout failure: unknown negative produced a known match: "
+                            "aggregate_score=%.4f support=%s",
+                            float(agg_score),
+                            support_at_strong,
+                        )
+                        log_private(
+                            logger,
+                            getattr(args, "verbose_private", False),
+                            "Holdout failure private details: path=%r person_id=%s",
+                            str(neg_path),
+                            pid,
+                        )
         
     report = {
         "positive_aggregate_pairs": len(positive_aggregate_scores),
@@ -651,7 +670,7 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
         "highest_false_aggregate": highest_false_agg
     }
     
-    logger.info("Calibration proposed: Accept=%s, Review=%s, Margin=%s", aggregate_accept_threshold:.3f, aggregate_review_threshold:.3f, minimum_aggregate_margin:.3f)
+    logger.info("Calibration proposed: Accept=%.3f, Review=%.3f, Margin=%.3f", aggregate_accept_threshold, aggregate_review_threshold, minimum_aggregate_margin)
     logger.info("Holdout evaluation: %s false matches on %s faces.", holdout_false_matches, len(holdout_neg_embs))
     
     if holdout_false_matches > 0 and not args.allow_failed_holdout:

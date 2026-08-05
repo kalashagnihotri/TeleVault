@@ -35,7 +35,7 @@ def dms_to_decimal(values, reference):
     except Exception:
         return None
 
-def extract_image_metadata(path: Path) -> MetadataResult:
+def extract_image_metadata(path: Path, opts: Optional[RuntimeOptions] = None) -> MetadataResult:
     result = MetadataResult()
     try:
         with Image.open(path) as image:

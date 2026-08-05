@@ -20,7 +20,7 @@ def main():
     source_path = Path(args.source)
     
     if not source_path.exists():
-        print("Error: %s does not exist.", source_path)
+        print("Error: %s does not exist." % source_path)
         sys.exit(1)
         
     config = load_config()
@@ -35,9 +35,9 @@ def main():
         img_info = decode_image_with_exif(str(source_path))
     except Exception as e:
         if args.verbose_private:
-            print("Failed to decode image %s: %s", source_path.name, e)
+            print("Failed to decode image %s: %s" % (source_path.name, e))
         else:
-            print("Failed to decode image: %s", e)
+            print("Failed to decode image: %s" % e)
         sys.exit(1)
         
     image = img_info["image"]
@@ -50,22 +50,22 @@ def main():
     
     print("--- Image Diagnostics ---")
     if args.verbose_private:
-        print("Source file: %s", source_path.name)
+        print("Source file: %s" % source_path.name)
     else:
         import hashlib
         with open(source_path, "rb") as f:
             short_hash = hashlib.sha256(f.read()).hexdigest()[:8]
-        print("Source file: %s", short_hash)
+        print("Source file: %s" % short_hash)
         
-    print("Raw stored pixel dimensions: %sx%s", raw_width, raw_height)
-    print("EXIF orientation value: %s", exif_orientation)
-    print("Orientation normalization applied: %s", was_normalized)
-    print("Orientation-normalized dimensions: %sx%s", norm_width, norm_height)
+    print("Raw stored pixel dimensions: %sx%s" % (raw_width, raw_height))
+    print("EXIF orientation value: %s" % exif_orientation)
+    print("Orientation normalization applied: %s" % was_normalized)
+    print("Orientation-normalized dimensions: %sx%s" % (norm_width, norm_height))
     
     # We create a new detector instance per threshold, bypassing Cv2FaceEngine which loads everything
     detector_path = config.faces.model_root / config.faces.detector_model
     if not detector_path.exists():
-        print("Error: Detector model missing at %s", detector_path)
+        print("Error: Detector model missing at %s" % detector_path)
         sys.exit(1)
         
     for threshold in args.thresholds:
@@ -82,13 +82,13 @@ def main():
         height, width, _ = image.shape
         detector.setInputSize((width, height))
         
-        print("\n--- Threshold: %s ---", threshold:.2f)
-        print("Detector input dimensions: %sx%s", width, height)
+        print(f"\n--- Threshold: {threshold:.2f} ---")
+        print("Detector input dimensions: %sx%s" % (width, height))
         
         _, faces = detector.detect(image)
         detected = faces if faces is not None else []
         
-        print("Detection count: %s", len(detected))
+        print("Detection count: %s" % len(detected))
         
         for idx, face in enumerate(detected, 1):
             conf = float(face[-1])
@@ -100,11 +100,11 @@ def main():
             else:
                 decision = "ACCEPTED_SIZE"
                 
-            print("  Face %s:", idx)
-            print("    confidence: %s", conf:.4f)
-            print("    bounding-box width: %s", w)
-            print("    bounding-box height: %s", h)
-            print("    minimum-size decision (orientation-normalized detector-input coordinate space): %s", decision)
+            print("  Face %s:" % idx)
+            print(f"    confidence: {conf:.4f}")
+            print("    bounding-box width: %s" % w)
+            print("    bounding-box height: %s" % h)
+            print("    minimum-size decision (orientation-normalized detector-input coordinate space): %s" % decision)
             
 if __name__ == "__main__":
     main()

@@ -8,7 +8,7 @@ def test_calibration_retains_prior_on_failure(tmp_path):
     db.apply_migrations(Path(__file__).parent.parent / "sql")
     
     # activate first calibration
-    db.activate_calibration("model_1", "hash_1", 0.8, 0.7, 0.1, 10, 10, "{}")
+    db.activate_calibration(model_identity="model_1", reference_set_hash="hash_1", accept_threshold=0.8, review_threshold=0.7, minimum_margin=0.1, individual_strong_support_threshold=0.75, positive_pair_count=10, negative_pair_count=10, report_json="{}")
     cal = db.get_active_calibration("model_1", "hash_1")
     assert cal is not None
     assert cal["active"] == 1
@@ -18,7 +18,7 @@ def test_calibration_retains_prior_on_failure(tmp_path):
     # Since activation is transactional, we just prove they don't deactivate.
     
     # Try another one, and it deactivates the OLD ONE
-    db.activate_calibration("model_1", "hash_2", 0.85, 0.75, 0.1, 20, 20, "{}")
+    db.activate_calibration(model_identity="model_1", reference_set_hash="hash_2", accept_threshold=0.85, review_threshold=0.75, minimum_margin=0.1, individual_strong_support_threshold=0.8, positive_pair_count=20, negative_pair_count=20, report_json="{}")
     old_cal = db.get_active_calibration("model_1", "hash_1")
     assert old_cal is None # it's no longer active
     
@@ -29,7 +29,7 @@ def test_stale_reference_set_calibration_not_selected(tmp_path):
     db = ArchiveDatabase(tmp_path / "test.db")
     db.apply_migrations(Path(__file__).parent.parent / "sql")
     
-    db.activate_calibration("model_1", "hash_1", 0.8, 0.7, 0.1, 10, 10, "{}")
+    db.activate_calibration(model_identity="model_1", reference_set_hash="hash_1", accept_threshold=0.8, review_threshold=0.7, minimum_margin=0.1, individual_strong_support_threshold=0.75, positive_pair_count=10, negative_pair_count=10, report_json="{}")
     
     # If the current reference set hash is 'hash_2', it shouldn't return anything
     cal = db.get_active_calibration("model_1", "hash_2")
@@ -41,8 +41,8 @@ def test_same_analysis_key_is_idempotent(tmp_path):
     
     with db.transaction() as conn:
         conn.execute("INSERT INTO media (id, sha256, short_hash, original_filename, original_path, state, media_type, size_bytes, modified_ns, discovered_at, updated_at) VALUES (1, 'hash', 'hash', 'file', 'path', 'BACKED_UP', 'image', 1234, 0, '2026-01-01T00:00:00', '2026-01-01T00:00:00')")
-    db.activate_calibration("model_1", "ref_hash", 0.8, 0.7, 0.1, 10, 10, "{}")
-    db.activate_calibration("model_1", "ref_hash2", 0.8, 0.7, 0.1, 10, 10, "{}")
+    db.activate_calibration(model_identity="model_1", reference_set_hash="ref_hash", accept_threshold=0.8, review_threshold=0.7, minimum_margin=0.1, individual_strong_support_threshold=0.75, positive_pair_count=10, negative_pair_count=10, report_json="{}")
+    db.activate_calibration(model_identity="model_1", reference_set_hash="ref_hash2", accept_threshold=0.8, review_threshold=0.7, minimum_margin=0.1, individual_strong_support_threshold=0.75, positive_pair_count=10, negative_pair_count=10, report_json="{}")
         
     id1 = db.start_face_analysis_attempt(1, "CALIBRATED", 1, "model_1", "ref_hash", 1)
     id2 = db.start_face_analysis_attempt(1, "CALIBRATED", 1, "model_1", "ref_hash", 1)
@@ -55,8 +55,8 @@ def test_changed_calibration_creates_new_analysis_version(tmp_path):
     
     with db.transaction() as conn:
         conn.execute("INSERT INTO media (id, sha256, short_hash, original_filename, original_path, state, media_type, size_bytes, modified_ns, discovered_at, updated_at) VALUES (1, 'hash', 'hash', 'file', 'path', 'BACKED_UP', 'image', 1234, 0, '2026-01-01T00:00:00', '2026-01-01T00:00:00')")
-    db.activate_calibration("model_1", "ref_hash", 0.8, 0.7, 0.1, 10, 10, "{}")
-    db.activate_calibration("model_1", "ref_hash2", 0.8, 0.7, 0.1, 10, 10, "{}")
+    db.activate_calibration(model_identity="model_1", reference_set_hash="ref_hash", accept_threshold=0.8, review_threshold=0.7, minimum_margin=0.1, individual_strong_support_threshold=0.75, positive_pair_count=10, negative_pair_count=10, report_json="{}")
+    db.activate_calibration(model_identity="model_1", reference_set_hash="ref_hash2", accept_threshold=0.8, review_threshold=0.7, minimum_margin=0.1, individual_strong_support_threshold=0.75, positive_pair_count=10, negative_pair_count=10, report_json="{}")
         
     id1 = db.start_face_analysis_attempt(1, "CALIBRATED", 1, "model_1", "ref_hash", 1)
     id2 = db.start_face_analysis_attempt(1, "CALIBRATED", 2, "model_1", "ref_hash", 2)

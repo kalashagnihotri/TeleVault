@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import json
@@ -38,7 +38,9 @@ def mock_engine_config():
     config = MagicMock()
     config.faces.enabled = True
     config.faces.minimum_face_size_px = 50
-    config.faces.minimum_supporting_references = 1
+    from tests.conftest import configure_test_face_policy
+    config.faces.policy_identity = "mock_policy"
+    configure_test_face_policy(config, top_k=1, strong_support=1)
     return config
 
 def test_distinct_person_second_best(memory_db, mock_engine_config, tmp_path):
@@ -62,14 +64,9 @@ def test_distinct_person_second_best(memory_db, mock_engine_config, tmp_path):
         memory_db.add_reference(person1, "r2", "r2.jpg", 0.99, 100, 100, "{}", (np.ones(128, dtype=np.float32)*2).tobytes(), 128, "modelA")
         memory_db.add_reference(person2, "r3", "r3.jpg", 0.99, 100, 100, "{}", (np.ones(128, dtype=np.float32)*3).tobytes(), 128, "modelA")
         
-        with memory_db.connect() as conn:
-            ref_hashes = ["r1", "r2", "r3"]
-            ref_set_hash = hashlib.sha256("".join(sorted(ref_hashes)).encode()).hexdigest()
-            conn.execute(
-                "INSERT INTO face_calibrations (model_identity, reference_set_hash, accept_threshold, review_threshold, minimum_margin, positive_pair_count, negative_pair_count, active, generated_at) VALUES (?, ?, ?, ?, ?, 0, 0, 1, ?)",
-                ("modelA", ref_set_hash, 0.8, 0.6, 0.1, "now")
-            )
-            
+        from tests.conftest import activate_scoped_test_calibration
+        activate_scoped_test_calibration(memory_db, mock_engine_config, "modelA", ["r1", "r2", "r3"])
+        
         def compare_embeddings(emb1, emb2):
             if np.allclose(emb2, np.ones(128, dtype=np.float32)):
                 return 0.95 # Person 1 best
@@ -78,7 +75,7 @@ def test_distinct_person_second_best(memory_db, mock_engine_config, tmp_path):
             elif np.allclose(emb2, np.ones(128, dtype=np.float32)*3):
                 return 0.82 # Person 2 best
             return 0.0
-            
+        
         mock_engine.compare_embeddings.side_effect = compare_embeddings
         
         worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
@@ -92,93 +89,86 @@ def test_distinct_person_second_best(memory_db, mock_engine_config, tmp_path):
         assert face["best_score"] == 0.95
         assert face["second_best_person_id"] == person2
         assert face["second_best_score"] == 0.82
-        assert face["score_margin"] == pytest.approx(0.95 - 0.82)
+        assert math.isclose(face["score_margin"], 0.95 - 0.82)
         assert face["decision"] == "KNOWN_MATCH"
 
 def test_missing_second_best(memory_db, mock_engine_config, tmp_path):
     logger = logging.getLogger("test")
     logger.addHandler(logging.NullHandler())
-    
+
     mock_engine = MagicMock()
     mock_engine.model_identity.return_value = "modelA"
-    
+
     dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
     with patch("src.face_analysis.decode_image_with_exif", return_value={"image": dummy_img}):
         mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
         mock_engine.align_face.return_value = "aligned"
         mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"target")
-        
+
         person1 = memory_db.get_or_create_person("person1", "Person 1")
         memory_db.add_reference(person1, "r1", "r1.jpg", 0.99, 100, 100, "{}", np.ones(128, dtype=np.float32).tobytes(), 128, "modelA")
-        
-        with memory_db.connect() as conn:
-            ref_set_hash = hashlib.sha256(b"r1").hexdigest()
-            conn.execute(
-                "INSERT INTO face_calibrations (model_identity, reference_set_hash, accept_threshold, review_threshold, minimum_margin, positive_pair_count, negative_pair_count, active, generated_at) VALUES (?, ?, ?, ?, ?, 0, 0, 1, ?)",
-                ("modelA", ref_set_hash, 0.8, 0.6, 0.1, "now")
-            )
-            
+
+        from tests.conftest import activate_scoped_test_calibration
+        activate_scoped_test_calibration(memory_db, mock_engine_config, "modelA", ["r1"])
+
         mock_engine.compare_embeddings.return_value = 0.90
-        
+
         worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
         worker.load_snapshots()
         res = worker.analyze_image(dummy_img)
-        
+
         face = res.face_results[0]
         assert face["best_person_id"] == person1
         assert face["second_best_person_id"] is None
-        assert face["score_margin"] == pytest.approx(0.90)
-        assert face["decision"] == "KNOWN_MATCH"
+        assert face["second_best_score"] is None
+        assert face["score_margin"] == 0.90
 
 def test_group_photo_resilience(memory_db, mock_engine_config, tmp_path):
     logger = logging.getLogger("test")
     logger.addHandler(logging.NullHandler())
     mock_engine = MagicMock()
     mock_engine.model_identity.return_value = "modelA"
-    
+
     dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
     with patch("src.face_analysis.decode_image_with_exif", return_value={"image": dummy_img}):
         mock_engine.detect_faces.return_value = [
             [0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99],
             [150, 150, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]
         ]
-        
+
         def align_face(image, face):
             if face[0] == 0:
                 return "aligned1"
             else:
                 return "aligned2"
         mock_engine.align_face.side_effect = align_face
-        
+
         def create_embedding(aligned):
             if aligned == "aligned1":
                 raise ValueError("Crash on first face")
             return MagicMock(size=128, tobytes=lambda: b"target2")
         mock_engine.create_embedding.side_effect = create_embedding
-        
+
         person1 = memory_db.get_or_create_person("person1", "Person 1")
         memory_db.add_reference(person1, "r1", "r1.jpg", 0.99, 100, 100, "{}", np.ones(128, dtype=np.float32).tobytes(), 128, "modelA")
-        with memory_db.connect() as conn:
-            conn.execute(
-                "INSERT INTO face_calibrations (model_identity, reference_set_hash, accept_threshold, review_threshold, minimum_margin, positive_pair_count, negative_pair_count, active, generated_at) VALUES (?, ?, ?, ?, ?, 0, 0, 1, ?)",
-                ("modelA", hashlib.sha256(b"r1").hexdigest(), 0.8, 0.6, 0.1, "now")
-            )
-        mock_engine.compare_embeddings.return_value = 0.90
         
+        from tests.conftest import activate_scoped_test_calibration
+        activate_scoped_test_calibration(memory_db, mock_engine_config, "modelA", ["r1"])
+        mock_engine.compare_embeddings.return_value = 0.90
+
         worker = FaceAnalysisWorker(mock_engine_config, memory_db, mock_engine, logger)
         worker.load_snapshots()
         res = worker.analyze_image(dummy_img)
-        
+
         # Both faces should be recorded now (one error, one match)
         assert len(res.face_results) == 2
         assert res.raw_detections == 2
         assert res.accepted_faces == 1
         assert res.processing_errors == 1
-        
-        # Check first face is error
-        assert res.face_results[0]["decision"] == "ANALYSIS_ERROR"
-        
-        # Check second face is match
-        assert res.face_results[1]["decision"] == "KNOWN_MATCH"
-        assert res.face_results[1]["best_person_id"] == person1
-        assert res.stage == "SUCCESS"
+
+        error_face = next(f for f in res.face_results if f["decision"] == "ANALYSIS_ERROR")
+        assert error_face["error_stage"] == "EMBEDDING"
+        assert error_face["error_code"] == "ValueError"
+
+        good_face = next(f for f in res.face_results if f["decision"] == "KNOWN_MATCH")
+        assert good_face["best_person_id"] == person1

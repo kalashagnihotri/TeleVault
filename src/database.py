@@ -19,19 +19,30 @@ VALID_TRANSITIONS = {
 }
 
 class ArchiveDatabase:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, read_only: bool = False) -> None:
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
+        if self.read_only:
+            if not self.path.exists():
+                raise FileNotFoundError(f"Database not found at {self.path}")
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30)
+        if self.read_only:
+            connection = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True, timeout=30)
+        else:
+            connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
+        if not self.read_only:
+            connection.execute("PRAGMA journal_mode = WAL")
         return connection
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
+        if self.read_only:
+            raise RuntimeError("Database is opened in read-only mode")
         connection = self.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -78,6 +89,8 @@ class ArchiveDatabase:
                 self._adopt_or_apply_005(sql_file, version)
             elif version == "006":
                 self._apply_migration(sql_file, version)
+            elif version == "007":
+                self._adopt_or_apply_007(sql_file, version)
             else:
                 self._apply_migration(sql_file, version)
 
@@ -134,6 +147,11 @@ class ArchiveDatabase:
                 columns_media = {r["name"] for r in conn.execute("PRAGMA table_info(media)").fetchall()}
                 if "face_state" not in columns_media:
                     raise RuntimeError("Verification failed: face_state missing in media table.")
+                    
+            elif version == "007":
+                columns_fc = {r["name"] for r in conn.execute("PRAGMA table_info(face_calibrations)").fetchall()}
+                if "individual_strong_support_threshold" not in columns_fc:
+                    raise RuntimeError("Verification failed: 007 individual_strong_support_threshold missing.")
                 
     def _apply_migration(self, sql_file: Path, version: str) -> None:
         script = sql_file.read_text(encoding="utf-8")
@@ -315,6 +333,22 @@ class ArchiveDatabase:
             tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
             
         if "cleanup_state" in columns_media and "cleanup_attempts" in tables:
+            self._mark_applied(version)
+        else:
+            self._apply_migration(sql_file, version)
+
+
+    def _adopt_or_apply_007(self, sql_file: Path, version: str) -> None:
+        with self.connect() as conn:
+            # Safely check if the column already exists
+            tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "face_calibrations" not in tables:
+                self._apply_migration(sql_file, version)
+                return
+                
+            columns_fc = {r["name"] for r in conn.execute("PRAGMA table_info(face_calibrations)").fetchall()}
+        
+        if "individual_strong_support_threshold" in columns_fc:
             self._mark_applied(version)
         else:
             self._apply_migration(sql_file, version)
@@ -713,7 +747,7 @@ class ArchiveDatabase:
             ).fetchone()
             return dict(row) if row else None
 
-    def activate_calibration(self, model_identity: str, reference_set_hash: str, accept_threshold: float, review_threshold: float, minimum_margin: float, positive_pair_count: int, negative_pair_count: int, report_json: str) -> None:
+    def activate_calibration(self, model_identity: str, reference_set_hash: str, accept_threshold: float, review_threshold: float, minimum_margin: float, individual_strong_support_threshold: float, positive_pair_count: int, negative_pair_count: int, report_json: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self.transaction() as conn:
             conn.execute(
@@ -724,9 +758,9 @@ class ArchiveDatabase:
             )
             conn.execute(
                 "INSERT INTO face_calibrations "
-                "(model_identity, reference_set_hash, accept_threshold, review_threshold, minimum_margin, positive_pair_count, negative_pair_count, generated_at, report_json, active) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
-                (model_identity, reference_set_hash, accept_threshold, review_threshold, minimum_margin, positive_pair_count, negative_pair_count, now, report_json)
+                "(model_identity, reference_set_hash, accept_threshold, review_threshold, minimum_margin, individual_strong_support_threshold, positive_pair_count, negative_pair_count, generated_at, report_json, active) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                (model_identity, reference_set_hash, accept_threshold, review_threshold, minimum_margin, individual_strong_support_threshold, positive_pair_count, negative_pair_count, now, report_json)
             )
 
     def get_pending_face_analysis(self, limit: int = 10) -> list[dict]:

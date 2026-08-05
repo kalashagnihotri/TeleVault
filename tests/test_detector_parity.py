@@ -8,6 +8,10 @@ from src.face_analysis import FaceAnalysisWorker
 def test_filtering_logic_tracks_all_faces():
     # Setup mock engine
     mock_config = MagicMock()
+    mock_config.faces.aggregate_method = "top_k_mean"
+    mock_config.faces.aggregate_top_k = 1
+    mock_config.faces.minimum_strong_support = 1
+    mock_config.faces.policy_identity = "top_k_mean:k=1:strong_support=1:policy_v=1"
     mock_config.faces.minimum_face_size_px = 100
     
     mock_engine = MagicMock()
@@ -58,6 +62,10 @@ def test_filtering_logic_zero_faces():
 
 def test_filtering_logic_all_tiny():
     mock_config = MagicMock()
+    mock_config.faces.aggregate_method = "top_k_mean"
+    mock_config.faces.aggregate_top_k = 1
+    mock_config.faces.minimum_strong_support = 1
+    mock_config.faces.policy_identity = "top_k_mean:k=1:strong_support=1:policy_v=1"
     mock_config.faces.minimum_face_size_px = 100
     mock_engine = MagicMock()
     mock_engine.detect_faces.return_value = [

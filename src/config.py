@@ -51,12 +51,24 @@ class FaceConfig:
     detector_confidence: float
     minimum_face_size_px: int
     minimum_references_per_person: int
-    minimum_supporting_references: int
-    accept_threshold: float | None
-    review_threshold: float | None
-    minimum_margin: float | None
+    aggregate_method: str
+    aggregate_top_k: int
+    minimum_strong_support: int
+    aggregate_accept_threshold: float | None
+    aggregate_review_threshold: float | None
+    individual_strong_support_threshold: float | None
+    minimum_aggregate_margin: float | None
     save_debug_crops: bool
     similarity_metric: str
+
+    @property
+    def policy_identity(self) -> str:
+        return (
+            f"{self.aggregate_method}:"
+            f"k={self.aggregate_top_k}:"
+            f"strong_support={self.minimum_strong_support}:"
+            f"policy_v=1"
+        )
 
 @dataclass(slots=True)
 class TelegramTopicsConfig:
@@ -221,10 +233,13 @@ def load_config(yaml_path: Path = Path("config/config.yaml")) -> Config:
         detector_confidence=float(faces_data.get("detector_confidence", 0.90)),
         minimum_face_size_px=int(faces_data.get("minimum_face_size_px", 96)),
         minimum_references_per_person=int(faces_data.get("minimum_references_per_person", 5)),
-        minimum_supporting_references=int(faces_data.get("minimum_supporting_references", 2)),
-        accept_threshold=faces_data.get("accept_threshold"),
-        review_threshold=faces_data.get("review_threshold"),
-        minimum_margin=faces_data.get("minimum_margin"),
+        aggregate_method=str(faces_data.get("aggregate_method", "top_k_mean")),
+        aggregate_top_k=int(faces_data.get("aggregate_top_k", 3)),
+        minimum_strong_support=int(faces_data.get("minimum_strong_support", 2)),
+        aggregate_accept_threshold=faces_data.get("aggregate_accept_threshold") or faces_data.get("accept_threshold"),
+        aggregate_review_threshold=faces_data.get("aggregate_review_threshold") or faces_data.get("review_threshold"),
+        individual_strong_support_threshold=faces_data.get("individual_strong_support_threshold"),
+        minimum_aggregate_margin=faces_data.get("minimum_aggregate_margin") or faces_data.get("minimum_margin"),
         save_debug_crops=bool(faces_data.get("save_debug_crops", False)),
         similarity_metric=str(faces_data.get("similarity_metric", "cosine")),
     )
@@ -232,12 +247,21 @@ def load_config(yaml_path: Path = Path("config/config.yaml")) -> Config:
     if faces.enabled:
         if faces.similarity_metric != "cosine":
             raise ConfigError(f"similarity_metric must be cosine, got {faces.similarity_metric}")
+            
+        if faces.aggregate_method not in {"top_k_mean"}:
+            raise ConfigError(f"Unsupported aggregate_method: {faces.aggregate_method}")
+        if faces.aggregate_top_k < 1:
+            raise ConfigError("aggregate_top_k must be >= 1")
+        if faces.minimum_strong_support < 1:
+            raise ConfigError("minimum_strong_support must be >= 1")
+        if faces.minimum_strong_support > faces.aggregate_top_k:
+            raise ConfigError("minimum_strong_support cannot be greater than aggregate_top_k")
         
-        if faces.accept_threshold is not None and faces.review_threshold is not None:
-            if not (0 <= faces.review_threshold < faces.accept_threshold <= 1):
-                raise ConfigError(f"Invalid thresholds: must have 0 <= review_threshold < accept_threshold <= 1")
+        if faces.aggregate_accept_threshold is not None and faces.aggregate_review_threshold is not None:
+            if not (0 <= faces.aggregate_review_threshold < faces.aggregate_accept_threshold <= 1):
+                raise ConfigError(f"Invalid thresholds: must have 0 <= aggregate_review_threshold < aggregate_accept_threshold <= 1")
         
-        if faces.minimum_margin is not None and faces.minimum_margin <= 0:
-            raise ConfigError("minimum_margin must be > 0")
+        if faces.minimum_aggregate_margin is not None and faces.minimum_aggregate_margin <= 0:
+            raise ConfigError("minimum_aggregate_margin must be > 0")
 
     return Config(app=app, queue=queue, cleanup=cleanup, faces=faces, telegram=telegram, secrets=secrets)

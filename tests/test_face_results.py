@@ -8,16 +8,16 @@ from src.models import MediaCandidate
 @pytest.fixture
 def worker():
     config = MagicMock()
-    config.faces.minimum_face_size_px = 50
+    config.faces = MagicMock(minimum_face_size_px=50, aggregate_method='top_k_mean', aggregate_top_k=3, minimum_strong_support=2, minimum_references_per_person=3, policy_identity='top_k_mean:k=3:mss=2')
     db = MagicMock()
     engine = MagicMock()
     logger = MagicMock()
     
     w = FaceAnalysisWorker(config, db, engine, logger)
     w.calibration_snapshot = {
-        "accept_threshold": 0.8,
-        "review_threshold": 0.5,
-        "minimum_margin": 0.1,
+        "aggregate_accept_threshold": 0.8,
+        "aggregate_review_threshold": 0.5,
+        "minimum_aggregate_margin": 0.1,
         "calibration_id": 1
     }
     return w

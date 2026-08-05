@@ -79,9 +79,12 @@ sys.argv = ['main', '--dry-run']
 # We must ensure faces.enabled = True to hit the OpenCV check
 original_load_config = src.main.load_config
 def mock_load_config():
-    config = original_load_config()
-    config.faces.enabled = True
-    return config
+        import pathlib, sys, os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+        from tests.conftest import make_test_config
+        c = make_test_config(pathlib.Path(os.getcwd()))
+        c.faces.enabled = True
+        return c
 src.main.load_config = mock_load_config
 
 try:
@@ -108,9 +111,12 @@ sys.argv = ['main', '--dry-run']
 
 original_load_config = src.main.load_config
 def mock_load_config():
-    config = original_load_config()
-    config.faces.enabled = False
-    return config
+        import pathlib, sys, os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+        from tests.conftest import make_test_config
+        c = make_test_config(pathlib.Path(os.getcwd()))
+        c.faces.enabled = False
+        return c
 src.main.load_config = mock_load_config
 
 try:

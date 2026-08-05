@@ -429,6 +429,49 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
     write_allowed = check_write_permission(args, config, logger)
     model_identity = engine.model_identity()
     
+    negatives_dir = Path(args.negatives_dir) if args.negatives_dir else None
+    calibration_negatives = []
+    holdout_negatives = []
+    
+    if negatives_dir:
+        calib_dir = negatives_dir / "calibration"
+        holdout_dir = negatives_dir / "holdout"
+        
+        if calib_dir.exists():
+            for p in calib_dir.iterdir():
+                if p.is_file():
+                    calibration_negatives.append(p)
+                    
+        if holdout_dir.exists():
+            for p in holdout_dir.iterdir():
+                if p.is_file():
+                    holdout_negatives.append(p)
+    
+    from src.image_utils import decode_image_with_exif
+    
+    def extract_negative_embeddings(paths):
+        embeddings = []
+        for path in paths:
+            try:
+                img_info = decode_image_with_exif(str(path))
+                faces = engine.detect_faces(img_info["image"])
+                for face in faces:
+                    w = face[2]
+                    h = face[3]
+                    if w < config.faces.minimum_face_size_px or h < config.faces.minimum_face_size_px:
+                        continue
+                    aligned = engine.align_face(img_info["image"], face)
+                    emb = engine.create_embedding(aligned)
+                    embeddings.append((emb, str(path)))
+            except Exception as e:
+                logger.debug(f"Failed to extract negative from {path}: {e}")
+        return embeddings
+
+    logger.info("Extracting negative embeddings...")
+    calib_neg_embs = extract_negative_embeddings(calibration_negatives)
+    holdout_neg_embs = extract_negative_embeddings(holdout_negatives)
+    logger.info(f"Found {len(calib_neg_embs)} calibration negative faces and {len(holdout_neg_embs)} holdout negative faces.")
+    
     people = db.get_active_people()
     if len(people) < 2:
         logger.error("Calibration requires at least two enrolled people.")
@@ -455,69 +498,172 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
             
     import hashlib
     ref_hashes.sort()
-    ref_set_hash = hashlib.sha256("".join(ref_hashes).encode()).hexdigest()
+    base_ref_hash = hashlib.sha256("".join(ref_hashes).encode()).hexdigest() if ref_hashes else "empty"
+    
+    from src.hashing import get_calibration_scope_hash
+    ref_set_hash = get_calibration_scope_hash(model_identity, base_ref_hash, config.faces.policy_identity)
     
     # Generate scores
-    positive_scores = []
-    negative_scores = []
+    positive_aggregate_scores = []
+    positive_individual_scores = []
+    negative_aggregate_scores = []
+    
+    top_k = config.faces.aggregate_top_k
     
     pids = list(person_refs.keys())
     for i in range(len(pids)):
         refs_A = person_refs[pids[i]]
-        # Positive pairs
-        for r1 in range(len(refs_A)):
-            for r2 in range(r1 + 1, len(refs_A)):
-                e1 = np.frombuffer(refs_A[r1]["embedding_blob"], dtype=np.float32)
-                e2 = np.frombuffer(refs_A[r2]["embedding_blob"], dtype=np.float32)
-                score = engine.compare_embeddings(e1, e2)
-                positive_scores.append(score)
+        
+        # Positive pairs (LOOCV)
+        for r_test in refs_A:
+            e_test = np.frombuffer(r_test["embedding_blob"], dtype=np.float32)
+            
+            # Scores against other references of the SAME person
+            same_person_scores = []
+            for r_ref in refs_A:
+                # Exclude exact same reference ID and same file hash
+                if r_test["reference_id"] == r_ref["reference_id"]:
+                    continue
+                if r_test["source_sha256"] == r_ref["source_sha256"]:
+                    continue
                 
-        # Negative pairs
-        for j in range(i + 1, len(pids)):
-            refs_B = person_refs[pids[j]]
-            for rA in refs_A:
-                for rB in refs_B:
-                    e1 = np.frombuffer(rA["embedding_blob"], dtype=np.float32)
-                    e2 = np.frombuffer(rB["embedding_blob"], dtype=np.float32)
-                    score = engine.compare_embeddings(e1, e2)
-                    negative_scores.append(score)
+                e_ref = np.frombuffer(r_ref["embedding_blob"], dtype=np.float32)
+                score = engine.compare_embeddings(e_test, e_ref)
+                same_person_scores.append(score)
+                positive_individual_scores.append(score)
+                
+            if len(same_person_scores) > 0:
+                sorted_scores = sorted(same_person_scores, reverse=True)
+                top_scores = sorted_scores[:min(top_k, len(sorted_scores))]
+                agg_score = sum(top_scores) / len(top_scores)
+                positive_aggregate_scores.append(agg_score)
+                
+            # Negative pairs against OTHER enrolled people
+            for j in range(len(pids)):
+                if i == j: continue
+                refs_B = person_refs[pids[j]]
+                other_person_scores = []
+                for r_ref in refs_B:
+                    e_ref = np.frombuffer(r_ref["embedding_blob"], dtype=np.float32)
+                    score = engine.compare_embeddings(e_test, e_ref)
+                    other_person_scores.append(score)
+                
+                if len(other_person_scores) > 0:
+                    sorted_scores = sorted(other_person_scores, reverse=True)
+                    top_scores = sorted_scores[:min(top_k, len(sorted_scores))]
+                    agg_score = sum(top_scores) / len(top_scores)
+                    negative_aggregate_scores.append(agg_score)
                     
-    if not positive_scores or not negative_scores:
+            # Negative pairs against CALIBRATION unknowns
+            # For each unknown face, we treat it as a query against this person's references
+            # Or we treat the known reference as a query against... wait, the unknown is the query.
+            pass
+            
+    # Now use calibration negatives as queries against all enrolled people
+    for neg_emb, neg_path in calib_neg_embs:
+        for pid in pids:
+            refs = person_refs[pid]
+            scores = []
+            for r_ref in refs:
+                e_ref = np.frombuffer(r_ref["embedding_blob"], dtype=np.float32)
+                score = engine.compare_embeddings(neg_emb, e_ref)
+                scores.append(score)
+                
+            if len(scores) > 0:
+                sorted_scores = sorted(scores, reverse=True)
+                top_scores = sorted_scores[:min(top_k, len(sorted_scores))]
+                agg_score = sum(top_scores) / len(top_scores)
+                negative_aggregate_scores.append(agg_score)
+
+    if not positive_aggregate_scores or not negative_aggregate_scores:
         logger.error("Insufficient pairs to calibrate.")
         return 1
         
-    max_neg = max(negative_scores)
-    min_pos = min(positive_scores)
+    max_neg_agg = max(negative_aggregate_scores)
+    min_pos_agg = min(positive_aggregate_scores)
     
-    # We want conservative: accept threshold must be higher than all negatives
-    accept_threshold = max_neg + 0.05
-    review_threshold = max_neg + 0.01
-    minimum_margin = 0.05
+    # We want conservative: accept threshold must be higher than all negative aggregates
+    aggregate_accept_threshold = max_neg_agg + 0.05
+    aggregate_review_threshold = max_neg_agg + 0.01
+    minimum_aggregate_margin = 0.05
     
     # Enforce bounds
-    if accept_threshold >= 1.0:
-        accept_threshold = 0.99
-    if review_threshold >= accept_threshold:
-        review_threshold = accept_threshold - 0.01
+    if aggregate_accept_threshold >= 1.0:
+        aggregate_accept_threshold = 0.99
+    if aggregate_review_threshold >= aggregate_accept_threshold:
+        aggregate_review_threshold = aggregate_accept_threshold - 0.01
+        
+    # Calibrate individual strong support threshold
+    # Look at the distribution of individual positive scores that contributed to matches
+    if positive_individual_scores:
+        # A simple heuristic: the strong support threshold shouldn't be so high that 
+        # legitimate positive references fail to meet it. 
+        # We can set it to the 10th percentile of positive individual scores, or 
+        # bounded above max individual negative score (which we didn't explicitly track, 
+        # but we can approximate it or use the aggregate accept threshold as a floor)
+        individual_strong_support_threshold = aggregate_accept_threshold
+    else:
+        individual_strong_support_threshold = aggregate_accept_threshold
+        
+    # Holdout evaluation
+    holdout_false_matches = 0
+    holdout_errors = 0
+    highest_false_agg = -1.0
+    
+    for neg_emb, neg_path in holdout_neg_embs:
+        for pid in pids:
+            refs = person_refs[pid]
+            scores = []
+            for r_ref in refs:
+                e_ref = np.frombuffer(r_ref["embedding_blob"], dtype=np.float32)
+                score = engine.compare_embeddings(neg_emb, e_ref)
+                scores.append(score)
+                
+            if len(scores) > 0:
+                sorted_scores = sorted(scores, reverse=True)
+                top_scores = sorted_scores[:min(top_k, len(sorted_scores))]
+                agg_score = sum(top_scores) / len(top_scores)
+                
+                support_at_strong = sum(1 for s in scores if s >= individual_strong_support_threshold)
+                
+                if agg_score > highest_false_agg:
+                    highest_false_agg = agg_score
+                    
+                if agg_score >= aggregate_accept_threshold and support_at_strong >= config.faces.minimum_strong_support:
+                    # We don't have a second-best person in this loop, so margin is just agg_score.
+                    # Since margin requirement is agg_score >= minimum_aggregate_margin (usually 0.05),
+                    # if agg_score is e.g. 0.8, it will easily pass the margin check.
+                    if agg_score >= minimum_aggregate_margin:
+                        holdout_false_matches += 1
+                        logger.error(f"Holdout failure: Unknown image {neg_path} matched Person {pid} with aggregate score {agg_score:.4f} and support {support_at_strong}")
         
     report = {
-        "positive_pairs": len(positive_scores),
-        "negative_pairs": len(negative_scores),
-        "max_negative": max_neg,
-        "min_positive": min_pos,
-        "proposed_accept": accept_threshold,
-        "proposed_review": review_threshold,
-        "proposed_margin": minimum_margin
+        "positive_aggregate_pairs": len(positive_aggregate_scores),
+        "negative_aggregate_pairs": len(negative_aggregate_scores),
+        "max_negative_aggregate": max_neg_agg,
+        "min_positive_aggregate": min_pos_agg,
+        "proposed_aggregate_accept": aggregate_accept_threshold,
+        "proposed_aggregate_review": aggregate_review_threshold,
+        "proposed_aggregate_margin": minimum_aggregate_margin,
+        "proposed_individual_strong_support": individual_strong_support_threshold,
+        "holdout_faces": len(holdout_neg_embs),
+        "holdout_false_matches": holdout_false_matches,
+        "highest_false_aggregate": highest_false_agg
     }
     
-    logger.info(f"Calibration proposed: Accept={accept_threshold:.3f}, Review={review_threshold:.3f}, Margin={minimum_margin:.3f}")
+    logger.info(f"Calibration proposed: Accept={aggregate_accept_threshold:.3f}, Review={aggregate_review_threshold:.3f}, Margin={minimum_aggregate_margin:.3f}")
+    logger.info(f"Holdout evaluation: {holdout_false_matches} false matches on {len(holdout_neg_embs)} faces.")
+    
+    if holdout_false_matches > 0 and not args.allow_failed_holdout:
+        logger.error("Calibration failed holdout evaluation. Refusing to activate.")
+        return 1
     
     if not write_allowed:
         logger.info("[DRY-RUN] Would activate this calibration.")
     else:
         db.activate_calibration(
-            model_identity, ref_set_hash, accept_threshold, review_threshold, minimum_margin, 
-            len(positive_scores), len(negative_scores), json.dumps(report)
+            model_identity, ref_set_hash, aggregate_accept_threshold, aggregate_review_threshold, minimum_aggregate_margin, 
+            individual_strong_support_threshold, len(positive_aggregate_scores), len(negative_aggregate_scores), json.dumps(report)
         )
         logger.info("Calibration activated successfully.")
         
@@ -545,6 +691,8 @@ def main():
     
     p_calibrate = subparsers.add_parser("calibrate")
     p_calibrate.add_argument("--commit", action="store_true", help="Commit changes to database")
+    p_calibrate.add_argument("--negatives-dir", help="Path to directory containing 'calibration' and 'holdout' unknown faces")
+    p_calibrate.add_argument("--allow-failed-holdout", action="store_true", help="Allow calibration to be saved even if it fails holdout validation")
     
     args = parser.parse_args()
     

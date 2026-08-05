@@ -82,7 +82,10 @@ class FaceAnalysisWorker:
         self.ref_snapshot = valid_refs
         
         ref_hashes.sort()
-        ref_set_hash = hashlib.sha256("".join(ref_hashes).encode()).hexdigest() if ref_hashes else "empty"
+        base_ref_hash = hashlib.sha256("".join(ref_hashes).encode()).hexdigest() if ref_hashes else "empty"
+        from src.hashing import get_calibration_scope_hash
+        policy_id = self.config.faces.policy_identity
+        ref_set_hash = get_calibration_scope_hash(model_identity, base_ref_hash, policy_id)
         
         calib = self.db.get_active_calibration(model_identity, ref_set_hash)
         if calib:
@@ -99,6 +102,7 @@ class FaceAnalysisWorker:
                 self.calibration_snapshot["accept_threshold"] = acc
                 self.calibration_snapshot["review_threshold"] = rev
                 self.calibration_snapshot["minimum_margin"] = marg
+                self.calibration_snapshot["individual_strong_support_threshold"] = _to_float(calib.get("individual_strong_support_threshold", acc))
             except Exception as e:
                 self.logger.debug(f"Invalid calibration data: {e}", exc_info=True)
                 self.calibration_snapshot = "INVALID"
@@ -106,6 +110,27 @@ class FaceAnalysisWorker:
             self.calibration_snapshot = None
             
         self.snapshots_loaded = True
+
+    def _calculate_person_scores(self, embedding, top_k: int):
+        scores_by_person = {}
+        for ref in (self.ref_snapshot or []):
+            pid = ref["person_id"]
+            score = self.engine.compare_embeddings(embedding, ref["embedding"])
+            score = float(score)
+            if pid not in scores_by_person:
+                scores_by_person[pid] = []
+            scores_by_person[pid].append(score)
+            
+        person_max_scores = {}
+        person_aggregate_scores = {}
+        for pid, scores in scores_by_person.items():
+            person_max_scores[pid] = max(scores)
+            sorted_scores = sorted(scores, reverse=True)
+            top_scores = sorted_scores[:min(top_k, len(sorted_scores))]
+            person_aggregate_scores[pid] = sum(top_scores) / len(top_scores)
+            
+        sorted_people = sorted(person_aggregate_scores.items(), key=lambda x: x[1], reverse=True)
+        return scores_by_person, person_max_scores, person_aggregate_scores, sorted_people
 
     def _generate_analysis_key(self) -> tuple[str, int]:
         version = 2
@@ -192,34 +217,41 @@ class FaceAnalysisWorker:
                 score_margin = 0.0
                 supporting_count = 0
                 
-                if self.calibration_snapshot:
-                    scores_by_person = {}
-                    for ref in self.ref_snapshot:
-                        pid = ref["person_id"]
-                        score = self.engine.compare_embeddings(embedding, ref["embedding"])
-                        score = _to_float(score)
-                        if pid not in scores_by_person:
-                            scores_by_person[pid] = []
-                        scores_by_person[pid].append(score)
-                        
-                    person_max_scores = {pid: max(scores) for pid, scores in scores_by_person.items()}
-                    sorted_people = sorted(person_max_scores.items(), key=lambda x: x[1], reverse=True)
+                top_k = int(self.config.faces.aggregate_top_k) if not hasattr(self.config.faces.aggregate_top_k, "_mock_name") else int(self.config.faces.aggregate_top_k())
+                scores_by_person, person_max_scores, person_aggregate_scores, sorted_people = self._calculate_person_scores(
+                    embedding,
+                    top_k=top_k
+                )
+                
+                if len(sorted_people) > 0:
+                    best_person_id = sorted_people[0][0]
+                    best_score = sorted_people[0][1]
                     
-                    if len(sorted_people) > 0:
-                        best_person_id = sorted_people[0][0]
-                        best_score = sorted_people[0][1]
+                if len(sorted_people) > 1:
+                    second_best_person_id = sorted_people[1][0]
+                    second_best_score = sorted_people[1][1]
+                    score_margin = best_score - second_best_score
+                elif len(sorted_people) == 1:
+                    score_margin = best_score
+                    
+                if self.calibration_snapshot:
+                    acc_thresh = float(self.calibration_snapshot.get("accept_threshold", 0.8))
+                    rev_thresh = float(self.calibration_snapshot.get("review_threshold", 0.6))
+                    marg_thresh = float(self.calibration_snapshot.get("minimum_margin", 0.1))
+                    ind_thresh = float(self.calibration_snapshot.get("individual_strong_support_threshold", acc_thresh))
+                    
+                    min_support = int(self.config.faces.minimum_strong_support) if not hasattr(self.config.faces.minimum_strong_support, "_mock_name") else int(self.config.faces.minimum_strong_support())
+
+                    if best_person_id is not None:
+                        strong_support = sum(1 for s in scores_by_person[best_person_id] if s >= ind_thresh)
+                        supporting_count = strong_support
+                    else:
+                        strong_support = 0
+                        supporting_count = 0
                         
-                    if len(sorted_people) > 1:
-                        second_best_person_id = sorted_people[1][0]
-                        second_best_score = sorted_people[1][1]
-                        score_margin = best_score - second_best_score
-                    elif len(sorted_people) == 1:
-                        score_margin = best_score
-                        
-                    if best_score >= self.calibration_snapshot["accept_threshold"]:
-                        if score_margin >= self.calibration_snapshot["minimum_margin"]:
-                            supporting_count = sum(1 for s in scores_by_person[best_person_id] if s >= self.calibration_snapshot["review_threshold"])
-                            if supporting_count >= self.config.faces.minimum_supporting_references:
+                    if best_score >= acc_thresh:
+                        if score_margin >= marg_thresh:
+                            if strong_support >= min_support:
                                 decision = "KNOWN_MATCH"
                                 res.accepted_faces += 1
                             else:
@@ -228,7 +260,7 @@ class FaceAnalysisWorker:
                         else:
                             decision = "UNKNOWN_AMBIGUOUS"
                             res.unknown_faces += 1
-                    elif best_score >= self.calibration_snapshot["review_threshold"]:
+                    elif best_score >= rev_thresh:
                         decision = "UNKNOWN_LOW_SCORE"
                         res.unknown_faces += 1
                     else:

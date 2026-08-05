@@ -77,16 +77,16 @@ def test_face_engine_cosine_thresholds(test_config):
     from src.config import ConfigError
     
     # Valid
-    config.faces.accept_threshold = 0.8
-    config.faces.review_threshold = 0.5
+    config.faces.aggregate_accept_threshold = 0.8
+    config.faces.aggregate_review_threshold = 0.5
     
     # Invalid
-    config.faces.accept_threshold = 0.5
-    config.faces.review_threshold = 0.8
+    config.faces.aggregate_accept_threshold = 0.5
+    config.faces.aggregate_review_threshold = 0.8
     with pytest.raises(ConfigError, match="Invalid thresholds"):
         from src.config import Config
-        if config.faces.accept_threshold is not None and config.faces.review_threshold is not None:
-            if not (0 <= config.faces.review_threshold < config.faces.accept_threshold <= 1):
+        if config.faces.aggregate_accept_threshold is not None and config.faces.aggregate_review_threshold is not None:
+            if not (0 <= config.faces.aggregate_review_threshold < config.faces.aggregate_accept_threshold <= 1):
                 raise ConfigError(f"Invalid thresholds: must have 0 <= review_threshold < accept_threshold <= 1")
 
 @pytest.mark.skipif(not OPENCV_AVAILABLE, reason="requires opencv")

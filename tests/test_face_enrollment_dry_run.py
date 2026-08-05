@@ -28,6 +28,10 @@ def mock_engine_config(tmp_path):
     config = MagicMock()
     config.faces.enabled = True
     config.faces.reference_root = tmp_path
+    config.faces.aggregate_method = "top_k_mean"
+    config.faces.aggregate_top_k = 3
+    config.faces.minimum_strong_support = 2
+    config.faces.policy_identity = "mock_policy"
     config.faces.minimum_face_size_px = 20
     config.faces.minimum_references_per_person = 1
     config.app.dry_run = True
@@ -74,7 +78,7 @@ def test_enroll_dry_run_creates_zero_records(mock_imread, mock_get_engine, memor
     mock_imread.return_value = "dummy_image"
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.return_value = "aligned"
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "test_model"
 
     args = MagicMock()
@@ -144,7 +148,7 @@ def test_rebuild_dry_run_creates_zero_rows(mock_check, memory_db, mock_engine_co
     mock_engine = MagicMock()
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.return_value = "aligned"
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "modelA"
 
     with patch("src.face_enrollment.get_engine", return_value=mock_engine), \
@@ -181,14 +185,17 @@ def test_calibrate_dry_run_creates_zero_rows(mock_get_engine, memory_db, mock_en
     p1 = memory_db.get_or_create_person("p1", "P1")
     p2 = memory_db.get_or_create_person("p2", "P2")
     # Must be valid length for float32 (multiple of 4 bytes)
-    memory_db.add_reference(p1, "h1", "p1.jpg", 0.99, 100, 100, "{}", b"blob1234", 128, "modelA")
-    memory_db.add_reference(p1, "h3", "p1_b.jpg", 0.99, 100, 100, "{}", b"blob3456", 128, "modelA")
-    memory_db.add_reference(p2, "h2", "p2.jpg", 0.99, 100, 100, "{}", b"blob5678", 128, "modelA")
-    memory_db.add_reference(p2, "h4", "p2_b.jpg", 0.99, 100, 100, "{}", b"blob7890", 128, "modelA")
+    memory_db.add_reference(p1, "h1", "p1.jpg", 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
+    memory_db.add_reference(p1, "h3", "p1_b.jpg", 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
+    memory_db.add_reference(p2, "h2", "p2.jpg", 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
+    memory_db.add_reference(p2, "h4", "p2_b.jpg", 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
     
     mock_engine_config.faces.minimum_references_per_person = 2
     
     args = MagicMock()
+    args.negatives_dir = None
+    args.allow_failed_holdout = False
+    args.commit = False
     args.commit = False
     logger = MagicMock()
     
@@ -219,7 +226,7 @@ def test_successful_commit_writes_records(mock_imread, mock_get_engine, memory_d
     mock_imread.return_value = "dummy_image"
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.return_value = "aligned"
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "test_model"
 
     args = MagicMock()
@@ -259,7 +266,7 @@ def test_failure_on_later_reference_creates_no_partial_rows(mock_imread, mock_ge
     mock_imread.return_value = "dummy_image"
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.side_effect = side_effect
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "test_model"
 
     args = MagicMock()
@@ -323,7 +330,7 @@ def test_four_valid_references_minimum_five_produces_zero_committed_rows(mock_im
     mock_imread.return_value = "dummy_image"
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.return_value = "aligned"
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "test_model"
 
     mock_engine_config.faces.minimum_references_per_person = 5
@@ -354,8 +361,8 @@ def test_failed_rebuild_too_few_references_preserves_old_references(mock_imread,
     
     # Setup old person and reference
     person_id = memory_db.get_or_create_person(person_slug, "Name")
-    memory_db.add_reference(person_id, "hash1", str(person_folder / "1.jpg"), 0.99, 100, 100, "{}", b"blob1234", 128, "modelA")
-    memory_db.add_reference(person_id, "hash2", str(person_folder / "2.jpg"), 0.99, 100, 100, "{}", b"blob5678", 128, "modelA")
+    memory_db.add_reference(person_id, "hash1", str(person_folder / "1.jpg"), 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
+    memory_db.add_reference(person_id, "hash2", str(person_folder / "2.jpg"), 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
     
     # We only have 2 active old refs. We want minimum 5.
     mock_engine_config.faces.minimum_references_per_person = 5
@@ -372,7 +379,7 @@ def test_failed_rebuild_too_few_references_preserves_old_references(mock_imread,
     mock_imread.return_value = "dummy_image"
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.return_value = "aligned"
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "modelA"
 
     args = MagicMock()
@@ -408,11 +415,11 @@ def test_rebuild_discovers_eight_files_and_reactivates(mock_imread, mock_get_eng
     hash1 = hashlib.sha256(b"dummy1").hexdigest()
     hash2 = hashlib.sha256(b"dummy2").hexdigest()
 
-    memory_db.add_reference(person_id, hash0, str(person_folder / "0.jpg"), 0.99, 100, 100, "{}", b"blob", 128, "modelA")
-    memory_db.add_reference(person_id, hash1, str(person_folder / "1.jpg"), 0.99, 100, 100, "{}", b"blob", 128, "modelA")
-    memory_db.add_reference(person_id, hash2, str(person_folder / "2.jpg"), 0.99, 100, 100, "{}", b"blob", 128, "modelA")
+    memory_db.add_reference(person_id, hash0, str(person_folder / "0.jpg"), 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
+    memory_db.add_reference(person_id, hash1, str(person_folder / "1.jpg"), 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
+    memory_db.add_reference(person_id, hash2, str(person_folder / "2.jpg"), 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
     # This one will be removed
-    memory_db.add_reference(person_id, "hash99", str(person_folder / "missing.jpg"), 0.99, 100, 100, "{}", b"blob", 128, "modelA")
+    memory_db.add_reference(person_id, "hash99", str(person_folder / "missing.jpg"), 0.99, 100, 100, "{}", b"0" * 512, 128, "modelA")
 
     # Folder has 8 files (0 to 7)
     for i in range(8):
@@ -429,7 +436,7 @@ def test_rebuild_discovers_eight_files_and_reactivates(mock_imread, mock_get_eng
     mock_imread.return_value = "dummy_image"
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.return_value = "aligned"
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "modelA"
 
     args = MagicMock()
@@ -495,7 +502,7 @@ def test_rebuild_discovers_uppercase_and_sorts(mock_imread, mock_get_engine, mem
     mock_imread.return_value = "dummy_image"
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.return_value = "aligned"
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "modelA"
 
     args = MagicMock()
@@ -529,7 +536,7 @@ def test_five_valid_references_allows_commit(mock_imread, mock_get_engine, memor
     mock_imread.return_value = "dummy_image"
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.return_value = "aligned"
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "test_model"
 
     mock_engine_config.faces.minimum_references_per_person = 5
@@ -571,7 +578,7 @@ def test_log_privacy_regression(mock_imread, mock_get_engine, memory_db, mock_en
     mock_imread.side_effect = side_effect
     mock_engine.detect_faces.return_value = [[0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]]
     mock_engine.align_face.return_value = "aligned"
-    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"emb")
+    mock_engine.create_embedding.return_value = MagicMock(size=128, tobytes=lambda: b"0" * 512)
     mock_engine.model_identity.return_value = "test_model"
     
     mock_engine_config.faces.minimum_references_per_person = 1

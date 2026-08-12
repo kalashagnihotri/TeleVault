@@ -11,7 +11,7 @@ from src.database import ArchiveDatabase
 from src.face_engine import Cv2FaceEngine, OPENCV_AVAILABLE, FaceEngineError
 from src.image_utils import decode_image_with_exif
 from src.models import ImageFaceAnalysisResult
-from src.face_policy import CURRENT_ANALYSIS_VERSION
+from src.face_policy import CURRENT_ANALYSIS_VERSION, get_face_size_tier
 from src.logging_utils import RuntimeOptions, ProcessingStage, log_private
 
 
@@ -177,27 +177,53 @@ class FaceAnalysisWorker:
                 confidence = _to_float(face[-1])
                 w, h = int(face[2]), int(face[3])
                 
-                if w < self.config.faces.minimum_face_size_px or h < self.config.faces.minimum_face_size_px:
+                size_tier = get_face_size_tier(w, h, self.config.faces)
+                
+                if size_tier == "IGNORED_TINY":
                     res.ignored_tiny += 1
                     res.face_results.append({
                         "face_index": idx,
-                        "bounding_box_json": json.dumps({"x": int(face[0]), "y": int(face[1]), "w": w, "h": h}),
+                        "bounding_box_json": json.dumps({
+                            "x": int(face[0]), "y": int(face[1]), "w": w, "h": h
+                        }),
+                        "quality_json": json.dumps({
+                            "size_tier": size_tier,
+                            "min_side_px": min(w, h),
+                            "width_px": w,
+                            "height_px": h,
+                            "low_resolution_rules_applied": False,
+                            "effective_accept_threshold": None,
+                            "effective_margin_threshold": None,
+                            "effective_individual_support_threshold": None,
+                            "effective_minimum_support": None,
+                            "detector_confidence_passed": None,
+                            "aggregate_score_passed": None,
+                            "margin_passed": None,
+                            "support_count_passed": None
+                        }),
                         "detector_confidence": confidence,
                         "decision": "IGNORED_TINY"
                     })
                     continue
                     
                 res.accepted_size += 1
-                accepted_faces.append((idx, face, confidence, w, h))
+                accepted_faces.append((idx, face, confidence, w, h, size_tier))
             except Exception as e:
                 res.processing_errors += 1
                 log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback: stage=SIZE_CHECK", short_hash, exc_info=True)
-                pass
+                res.face_results.append({
+                    "face_index": idx,
+                    "bounding_box_json": json.dumps({"w": w, "h": h}),
+                    "detector_confidence": confidence,
+                    "decision": "ANALYSIS_ERROR",
+                    "error_stage": "SIZE_CHECK",
+                    "error_code": type(e).__name__
+                })
                 
         # Log filtered metrics
         self.logger.info("Candidate [%s] detections filtered: accepted_size=%s, ignored_tiny=%s, processing_errors=%s", short_hash, res.accepted_size, res.ignored_tiny, res.processing_errors)
                 
-        for idx, face, confidence, w, h in accepted_faces:
+        for idx, face, confidence, w, h, size_tier in accepted_faces:
             try:
                 stage = "ALIGNMENT"
                 aligned = self.engine.align_face(image, face)
@@ -232,14 +258,40 @@ class FaceAnalysisWorker:
                 elif len(sorted_people) == 1:
                     score_margin = best_score
                     
-                if self.calibration_snapshot:
-                    acc_thresh = float(self.calibration_snapshot.get("accept_threshold", 0.8))
-                    rev_thresh = float(self.calibration_snapshot.get("review_threshold", 0.6))
-                    marg_thresh = float(self.calibration_snapshot.get("minimum_margin", 0.1))
-                    ind_thresh = float(self.calibration_snapshot.get("individual_strong_support_threshold", acc_thresh))
+                conf_passed = None
+                agg_passed = None
+                marg_passed = None
+                supp_passed = None
+                acc_thresh = None
+                marg_thresh = None
+                ind_thresh = None
+                min_support = None
                     
-                    min_support = int(self.config.faces.minimum_strong_support) if not hasattr(self.config.faces.minimum_strong_support, "_mock_name") else int(self.config.faces.minimum_strong_support())
+                if self.calibration_snapshot:
+                    calib_acc_thresh = float(self.calibration_snapshot.get("accept_threshold", 0.8))
+                    calib_rev_thresh = float(self.calibration_snapshot.get("review_threshold", 0.6))
+                    calib_marg_thresh = float(self.calibration_snapshot.get("minimum_margin", 0.1))
+                    calib_ind_thresh = float(self.calibration_snapshot.get("individual_strong_support_threshold", calib_acc_thresh))
+                    
+                    calib_min_support = int(self.config.faces.minimum_strong_support) if not hasattr(self.config.faces.minimum_strong_support, "_mock_name") else int(self.config.faces.minimum_strong_support())
 
+                    if size_tier == "LOW_RESOLUTION_CANDIDATE":
+                        acc_thresh = min(1.0, calib_acc_thresh + self.config.faces.low_resolution_accept_threshold_boost)
+                        rev_thresh = calib_rev_thresh
+                        marg_thresh = min(1.0, calib_marg_thresh + self.config.faces.low_resolution_margin_boost)
+                        ind_thresh = min(1.0, calib_ind_thresh + self.config.faces.low_resolution_individual_support_boost)
+                        min_support = max(calib_min_support + 1, self.config.faces.low_resolution_minimum_strong_support)
+                        req_conf = self.config.faces.low_resolution_detector_confidence
+                        
+                        conf_passed = confidence >= req_conf
+                    else:
+                        acc_thresh = calib_acc_thresh
+                        rev_thresh = calib_rev_thresh
+                        marg_thresh = calib_marg_thresh
+                        ind_thresh = calib_ind_thresh
+                        min_support = calib_min_support
+                        conf_passed = True
+                        
                     if best_person_id is not None:
                         strong_support = sum(1 for s in scores_by_person[best_person_id] if s >= ind_thresh)
                         supporting_count = strong_support
@@ -247,30 +299,51 @@ class FaceAnalysisWorker:
                         strong_support = 0
                         supporting_count = 0
                         
-                    if best_score >= acc_thresh:
-                        if score_margin >= marg_thresh:
-                            if strong_support >= min_support:
-                                decision = "KNOWN_MATCH"
-                                res.accepted_faces += 1
-                            else:
+                    agg_passed = best_score >= acc_thresh
+                    marg_passed = score_margin >= marg_thresh
+                    supp_passed = strong_support >= min_support
+                    
+                    if conf_passed and agg_passed and marg_passed and supp_passed:
+                        decision = "KNOWN_MATCH"
+                        res.accepted_faces += 1
+                    else:
+                        if size_tier == "LOW_RESOLUTION_CANDIDATE":
+                            decision = "UNKNOWN_LOW_RES"
+                            res.unknown_faces += 1
+                        else:
+                            if best_score >= calib_acc_thresh:
                                 decision = "UNKNOWN_AMBIGUOUS"
                                 res.unknown_faces += 1
-                        else:
-                            decision = "UNKNOWN_AMBIGUOUS"
-                            res.unknown_faces += 1
-                    elif best_score >= rev_thresh:
-                        decision = "UNKNOWN_LOW_SCORE"
-                        res.unknown_faces += 1
-                    else:
-                        decision = "UNKNOWN_LOW_SCORE"
-                        res.unknown_faces += 1
+                            elif best_score >= rev_thresh:
+                                decision = "UNKNOWN_LOW_SCORE"
+                                res.unknown_faces += 1
+                            else:
+                                decision = "UNKNOWN_LOW_SCORE"
+                                res.unknown_faces += 1
                 else:
                     decision = "UNKNOWN_UNCALIBRATED"
                     res.unknown_faces += 1
                     
+                quality_data = {
+                    "size_tier": size_tier,
+                    "min_side_px": min(w, h),
+                    "width_px": w,
+                    "height_px": h,
+                    "low_resolution_rules_applied": size_tier == "LOW_RESOLUTION_CANDIDATE",
+                    "effective_accept_threshold": acc_thresh,
+                    "effective_margin_threshold": marg_thresh,
+                    "effective_individual_support_threshold": ind_thresh,
+                    "effective_minimum_support": min_support,
+                    "detector_confidence_passed": conf_passed,
+                    "aggregate_score_passed": agg_passed,
+                    "margin_passed": marg_passed,
+                    "support_count_passed": supp_passed
+                }
+                    
                 res.face_results.append({
                     "face_index": idx,
                     "bounding_box_json": json.dumps({"x": int(face[0]), "y": int(face[1]), "w": w, "h": h}),
+                    "quality_json": json.dumps(quality_data),
                     "detector_confidence": confidence,
                     "embedding_blob": embedding.tobytes(),
                     "embedding_dimension": embedding.size,
@@ -287,9 +360,25 @@ class FaceAnalysisWorker:
             except Exception as e:
                 res.processing_errors += 1
                 log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback: stage=%s", short_hash, stage, exc_info=True)
+                quality_data = {
+                    "size_tier": size_tier,
+                    "min_side_px": min(w, h),
+                    "width_px": w,
+                    "height_px": h,
+                    "low_resolution_rules_applied": size_tier == "LOW_RESOLUTION_CANDIDATE",
+                    "effective_accept_threshold": None,
+                    "effective_margin_threshold": None,
+                    "effective_individual_support_threshold": None,
+                    "effective_minimum_support": None,
+                    "detector_confidence_passed": None,
+                    "aggregate_score_passed": None,
+                    "margin_passed": None,
+                    "support_count_passed": None
+                }
                 res.face_results.append({
                     "face_index": idx,
                     "bounding_box_json": json.dumps({"x": int(face[0]), "y": int(face[1]), "w": w, "h": h}),
+                    "quality_json": json.dumps(quality_data),
                     "detector_confidence": confidence,
                     "decision": "ANALYSIS_ERROR",
                     "error_stage": stage,
@@ -317,12 +406,28 @@ class FaceAnalysisWorker:
             
         self.load_snapshots()
         
+        analysis_key, analysis_version = self._generate_analysis_key()
+        model_identity = self.engine.model_identity()
+        from src.hashing import get_reference_set_hash, get_calibration_scope_hash
+        base_ref_hash = get_reference_set_hash(
+            r["source_sha256"] for r in (self.ref_snapshot or [])
+        )
+        policy_id = self.config.faces.policy_identity
+        ref_set_hash = get_calibration_scope_hash(model_identity, base_ref_hash, policy_id)
+        calib_id = self.calibration_snapshot["calibration_id"] if self.calibration_snapshot and self.calibration_snapshot != "INVALID" else None
+
         for idx, candidate in enumerate(valid_candidates, start=1):
             short_hash = candidate.sha256[:8] if candidate.sha256 else "unknown"
-            # log_prefix removed
             
-            stage = "DECODE"
+            stage = "PERSIST_ATTEMPT"
+            attempt_id = None
             try:
+                if candidate.media_id is not None:
+                    attempt_id = self.db.start_face_analysis_attempt(
+                        candidate.media_id, analysis_key, analysis_version, model_identity, ref_set_hash, calib_id
+                    )
+
+                stage = "DECODE"
                 img_info = decode_image_with_exif(str(candidate.path))
                 image = img_info["image"]
                 
@@ -334,30 +439,90 @@ class FaceAnalysisWorker:
                 if res.stage != "SUCCESS":
                     self.logger.info("Candidate %s [%s]: decision=ANALYSIS_ERROR stage=%s error=%s", idx, short_hash, res.stage, res.error_code)
                     self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, res.stage, res.error_code)
+                    if candidate.media_id is not None and attempt_id is not None:
+                        self.db.record_face_analysis_failure(candidate.media_id, attempt_id, f"ANALYSIS_ERROR", f"stage={res.stage} error={res.error_code}", "FAILED")
                 elif res.raw_detections == 0:
                     self.logger.info("Candidate %s [%s]: faces=0, decision=NO_FACE", idx, short_hash)
+                    if candidate.media_id is not None and attempt_id is not None:
+                        self._record_success_and_apply_routing(candidate.media_id, attempt_id, res.face_results, short_hash)
                 elif res.raw_detections > 0 and res.accepted_size == 0 and res.ignored_tiny > 0:
                     self.logger.info("Candidate %s [%s]: faces=0, decision=IGNORED_TINY", idx, short_hash)
+                    if candidate.media_id is not None and attempt_id is not None:
+                        self._record_success_and_apply_routing(candidate.media_id, attempt_id, res.face_results, short_hash)
                 elif res.accepted_size > 0 and completed_faces == 0 and res.processing_errors > 0:
                     self.logger.info("Candidate %s [%s]: faces=0, decision=ANALYSIS_ERROR", idx, short_hash)
+                    if candidate.media_id is not None and attempt_id is not None:
+                        self.db.record_face_analysis_failure(candidate.media_id, attempt_id, f"ANALYSIS_ERROR", f"stage=RESULT_ASSEMBLY error=ALL_FACES_FAILED", "FAILED")
                 elif completed_faces > 0 and res.processing_errors > 0:
                     self.logger.info("Candidate %s [%s]: faces=%s, decision=PARTIAL_ANALYSIS", idx, short_hash, completed_faces)
+                    if candidate.media_id is not None and attempt_id is not None:
+                        self._record_success_and_apply_routing(candidate.media_id, attempt_id, res.face_results, short_hash)
                 elif completed_faces > 0 and res.processing_errors == 0:
                     if len(res.face_results) == 1:
                         self.logger.info("Candidate %s [%s]: faces=1, decision=%s", idx, short_hash, res.face_results[0]["decision"])
                     else:
                         self.logger.info("Candidate %s [%s]: faces=%s, accepted=%s, unknown=%s", idx, short_hash, completed_faces, res.accepted_faces, res.unknown_faces)
+                    if candidate.media_id is not None and attempt_id is not None:
+                        self._record_success_and_apply_routing(candidate.media_id, attempt_id, res.face_results, short_hash)
                         
             except FaceAnalysisStageError as exc:
                 self.logger.info("Candidate %s [%s]: decision=ANALYSIS_ERROR stage=%s error=%s", idx, short_hash, exc.stage, type(exc.cause).__name__)
                 self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, exc.stage, type(exc.cause).__name__)
                 log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback", short_hash, exc_info=True)
+                if candidate.media_id is not None and attempt_id is not None:
+                    self.db.record_face_analysis_failure(candidate.media_id, attempt_id, f"ANALYSIS_ERROR", f"stage={exc.stage} error={type(exc.cause).__name__}", "FAILED")
             except Exception as e:
                 self.logger.info("Candidate %s [%s]: decision=ANALYSIS_ERROR stage=%s error=%s", idx, short_hash, stage, type(e).__name__)
                 self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, stage, type(e).__name__)
                 log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback", short_hash, exc_info=True)
+                if candidate.media_id is not None and attempt_id is not None:
+                    self.db.record_face_analysis_failure(candidate.media_id, attempt_id, f"ANALYSIS_ERROR", f"stage={stage} error={type(e).__name__}", "FAILED")
                 
         self.logger.info("Finished face analysis.")
+
+    def _apply_face_routing_if_enabled(self, media_id: int, short_hash: str) -> None:
+        if not self.config.faces.use_for_routing:
+            return
+
+        try:
+            people_names = self.db.get_media_people_names(media_id)
+            if not people_names:
+                return
+
+            context = self.db.get_media_routing_context(media_id)
+            if not context:
+                self.logger.info("Candidate [%s] face routing skipped: missing routing context", short_hash)
+                return
+
+            from src.routing import RouteInput, choose_topic
+            import json
+            labels_str = context.get("labels_json") or "[]"
+            labels = json.loads(labels_str)
+            route_input = RouteInput(
+                media_type=context["media_type"],
+                people=tuple(people_names),
+                labels=tuple(labels),
+                has_gps=bool(context["has_gps"])
+            )
+            
+            new_route = choose_topic(route_input)
+            
+            if new_route not in ("people", "family_groups"):
+                return
+                
+            updated = self.db.update_route_before_upload(media_id, new_route)
+            if updated:
+                self.logger.info("Candidate [%s] face routing updated: route=%s", short_hash, new_route)
+            else:
+                self.logger.info("Candidate [%s] face routing skipped: media no longer pre-upload safe", short_hash)
+                
+        except Exception as e:
+            self.logger.warning("Candidate [%s] face routing error: %s", short_hash, type(e).__name__)
+
+    def _record_success_and_apply_routing(self, media_id: int, attempt_id: int, face_results: list, short_hash: str) -> None:
+        self.db.record_face_analysis_success(media_id, attempt_id, face_results)
+        self._apply_face_routing_if_enabled(media_id, short_hash)
+
 
     def analyze_pending(self) -> None:
         if not self.config.faces.enabled or self.engine is None:
@@ -408,6 +573,7 @@ class FaceAnalysisWorker:
                     continue
                     
             stage = "PERSIST_ATTEMPT"
+            attempt_id = None
             try:
                 attempt_id = self.db.start_face_analysis_attempt(
                     media_id, analysis_key, analysis_version, model_identity, ref_set_hash, calib_id
@@ -428,31 +594,33 @@ class FaceAnalysisWorker:
                 elif res.raw_detections == 0:
                     self.logger.info("Candidate [%s] media_id=%s: faces=0, decision=NO_FACE", short_hash, media_id)
                     stage = "PERSIST_RESULTS"
-                    self.db.record_face_analysis_success(media_id, attempt_id, res.face_results)
+                    self._record_success_and_apply_routing(media_id, attempt_id, res.face_results, short_hash)
                 elif res.raw_detections > 0 and res.accepted_size == 0 and res.ignored_tiny > 0:
                     self.logger.info("Candidate [%s] media_id=%s: faces=0, decision=IGNORED_TINY", short_hash, media_id)
                     stage = "PERSIST_RESULTS"
-                    self.db.record_face_analysis_success(media_id, attempt_id, res.face_results)
+                    self._record_success_and_apply_routing(media_id, attempt_id, res.face_results, short_hash)
                 elif res.accepted_size > 0 and completed_faces == 0 and res.processing_errors > 0:
                     self.logger.info("Candidate [%s] media_id=%s: faces=0, decision=ANALYSIS_ERROR", short_hash, media_id)
                     self.db.record_face_analysis_failure(media_id, attempt_id, f"ANALYSIS_ERROR", f"stage=RESULT_ASSEMBLY error=ALL_FACES_FAILED", "FAILED")
                 elif completed_faces > 0 and res.processing_errors > 0:
                     self.logger.info("Candidate [%s] media_id=%s: faces=%s, decision=PARTIAL_ANALYSIS", short_hash, media_id, completed_faces)
                     stage = "PERSIST_RESULTS"
-                    self.db.record_face_analysis_success(media_id, attempt_id, res.face_results)
+                    self._record_success_and_apply_routing(media_id, attempt_id, res.face_results, short_hash)
                 elif completed_faces > 0 and res.processing_errors == 0:
                     if len(res.face_results) == 1:
                         self.logger.info("Candidate [%s] media_id=%s: faces=1, decision=%s", short_hash, media_id, res.face_results[0]["decision"])
                     else:
                         self.logger.info("Candidate [%s] media_id=%s: faces=%s, accepted=%s, unknown=%s", short_hash, media_id, completed_faces, res.accepted_faces, res.unknown_faces)
                     stage = "PERSIST_RESULTS"
-                    self.db.record_face_analysis_success(media_id, attempt_id, res.face_results)
+                    self._record_success_and_apply_routing(media_id, attempt_id, res.face_results, short_hash)
                     
             except FaceAnalysisStageError as exc:
                 self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, exc.stage, type(exc.cause).__name__)
                 log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback", short_hash, exc_info=True)
-                self.db.record_face_analysis_failure(media_id, attempt_id, f"ANALYSIS_ERROR", f"stage={exc.stage} error={type(exc.cause).__name__}", "FAILED")
+                if attempt_id is not None:
+                    self.db.record_face_analysis_failure(media_id, attempt_id, f"ANALYSIS_ERROR", f"stage={exc.stage} error={type(exc.cause).__name__}", "FAILED")
             except Exception as e:
                 self.logger.error("Candidate [%s] failed: stage=%s error=%s", short_hash, stage, type(e).__name__)
                 log_private(self.logger, self.opts.verbose_private, "Candidate [%s] private traceback", short_hash, exc_info=True)
-                self.db.record_face_analysis_failure(media_id, attempt_id, f"ANALYSIS_ERROR", f"stage={stage} error={type(e).__name__}", "FAILED")
+                if attempt_id is not None:
+                    self.db.record_face_analysis_failure(media_id, attempt_id, f"ANALYSIS_ERROR", f"stage={stage} error={type(e).__name__}", "FAILED")

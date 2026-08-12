@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 from datetime import datetime, timezone, timedelta
@@ -134,18 +135,34 @@ class ArchiveUploader:
             await self._handle_original(media, has_preview=False)
             return
 
+        labels = json.loads(media["labels_json"])
         people_names = []
-        if self.config.faces.enabled and self.config.faces.include_names_in_captions:
-            people_names = self.db.get_media_people_names(media["id"])
+        unknown_decisions = []
+        
+        if self.config.faces.enabled:
+            unknown_decisions = self.db.get_media_unknown_face_decisions(media["id"])
+            if unknown_decisions:
+                labels.append("unknown_person")
+            if self.config.faces.include_names_in_captions:
+                people_names = self.db.get_media_people_names(media["id"])
+            
+        face_error_code = None
+        if media.get("face_state") == "FAILED":
+            face_error_code = self.db.get_latest_face_error_code(media["id"])
             
         caption = build_caption(
             date_text=media["date_taken"] or "Unknown Date",
             location=media["location_label"] or "Misc",
             people=people_names,
-            labels=[],
+            unknown_face_decisions=unknown_decisions,
+            labels=labels,
             filename=media["original_filename"],
             short_hash=media["short_hash"],
-            max_length=self.config.telegram.caption_max_length
+            max_length=self.config.telegram.caption_max_length,
+            scene_state=media.get("scene_state", "COMPLETED"),
+            scene_error_code=media.get("scene_error_code"),
+            face_state=media.get("face_state", "COMPLETED"),
+            face_error_code=face_error_code
         )
 
         now = datetime.now(timezone.utc).isoformat()
@@ -226,18 +243,34 @@ class ArchiveUploader:
         # If no preview, we attach caption to document
         caption = None
         if not has_preview:
+            labels = json.loads(media["labels_json"])
             people_names = []
-            if self.config.faces.enabled and self.config.faces.include_names_in_captions:
-                people_names = self.db.get_media_people_names(media["id"])
+            unknown_decisions = []
+            
+            if self.config.faces.enabled:
+                unknown_decisions = self.db.get_media_unknown_face_decisions(media["id"])
+                if unknown_decisions:
+                    labels.append("unknown_person")
+                if self.config.faces.include_names_in_captions:
+                    people_names = self.db.get_media_people_names(media["id"])
+                    
+            face_error_code = None
+            if media.get("face_state") == "FAILED":
+                face_error_code = self.db.get_latest_face_error_code(media["id"])
                 
             caption = build_caption(
                 date_text=media["date_taken"] or "Unknown Date",
                 location=media["location_label"] or "Misc",
                 people=people_names,
-                labels=[],
+                unknown_face_decisions=unknown_decisions,
+                labels=labels,
                 filename=media["original_filename"],
                 short_hash=media["short_hash"],
-                max_length=self.config.telegram.caption_max_length
+                max_length=self.config.telegram.caption_max_length,
+                scene_state=media.get("scene_state", "COMPLETED"),
+                scene_error_code=media.get("scene_error_code"),
+                face_state=media.get("face_state", "COMPLETED"),
+                face_error_code=face_error_code
             )
 
         try:

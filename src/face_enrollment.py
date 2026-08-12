@@ -108,7 +108,8 @@ def cmd_enroll(args, config, db: ArchiveDatabase, logger: logging.Logger):
             confidence = float(face[-1])
             w, h = int(face[2]), int(face[3])
             
-            if w < config.faces.minimum_face_size_px or h < config.faces.minimum_face_size_px:
+            min_side = min(w, h)
+            if min_side < config.faces.minimum_face_size_px:
                 planned_rejected.append((str(img_path), file_hash, "TINY_FACE", f"Face {w}x{h} below minimum size"))
                 logger.warning("Rejected reference: TINY_FACE")
                 logger.debug("Tiny face: %s", img_path)
@@ -313,7 +314,8 @@ def cmd_rebuild(args, config, db: ArchiveDatabase, logger: logging.Logger):
         confidence = float(face[-1])
         w, h = int(face[2]), int(face[3])
         
-        if w < config.faces.minimum_face_size_px or h < config.faces.minimum_face_size_px:
+        min_side = min(w, h)
+        if min_side < config.faces.minimum_face_size_px:
             planned_rejected.append((str(img_path), file_hash, "TINY_FACE", f"Face {w}x{h} below minimum size"))
             logger.warning("Rejected reference: TINY_FACE")
             logger.debug("Tiny face: %s", img_path)
@@ -465,7 +467,8 @@ def cmd_calibrate(args, config, db: ArchiveDatabase, logger: logging.Logger):
                 for face in faces:
                     w = face[2]
                     h = face[3]
-                    if w < config.faces.minimum_face_size_px or h < config.faces.minimum_face_size_px:
+                    min_side = min(w, h)
+                    if min_side < config.faces.minimum_face_size_px:
                         continue
                     aligned = engine.align_face(img_info["image"], face)
                     emb = engine.create_embedding(aligned)

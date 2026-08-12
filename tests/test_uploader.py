@@ -202,3 +202,72 @@ async def test_uploader_ignores_backed_up_media(test_config, tmp_path):
     with db.connect() as conn:
         attempts = conn.execute("SELECT attempt_type, telegram_message_id FROM upload_attempts WHERE media_id = 10").fetchall()
         assert len(attempts) == 2
+
+def test_build_caption_no_errors():
+    from src.captions import build_caption
+    cap = build_caption(
+        date_text="2026-01-01",
+        location="Misc",
+        people=["Person A"],
+        labels=["mountain"],
+        filename="test.jpg",
+        short_hash="hash123",
+        scene_state="COMPLETED",
+        face_state="COMPLETED"
+    )
+    assert "Image Analysis" not in cap
+
+def test_build_caption_scene_error():
+    from src.captions import build_caption
+    cap = build_caption(
+        date_text="2026-01-01",
+        location="Misc",
+        people=["Person A"],
+        labels=["mountain"],
+        filename="test.jpg",
+        short_hash="hash123",
+        scene_state="FAILED",
+        scene_error_code="SCENE_MODEL_INIT_FAILED",
+        face_state="COMPLETED"
+    )
+    assert "⚠️ Image Analysis" in cap
+    assert "Scene: unavailable (SCENE_MODEL_INIT_FAILED)" in cap
+    assert "Faces: completed" in cap
+
+def test_build_caption_face_error():
+    from src.captions import build_caption
+    cap = build_caption(
+        date_text="2026-01-01",
+        location="Misc",
+        people=["Person A"],
+        labels=["mountain"],
+        filename="test.jpg",
+        short_hash="hash123",
+        scene_state="COMPLETED",
+        face_state="FAILED",
+        face_error_code="ANALYSIS_ERROR"
+    )
+    assert "⚠️ Image Analysis" in cap
+    assert "Scene: completed" in cap
+    assert "Faces: unavailable (ANALYSIS_ERROR)" in cap
+
+def test_build_caption_max_length_truncation():
+    from src.captions import build_caption
+    cap = build_caption(
+        date_text="2026-01-01",
+        location="Misc",
+        people=["Person A"] * 50, # Lots of people
+        labels=["mountain"] * 50, # Lots of labels
+        filename="test_very_long_filename_that_should_not_matter_much.jpg",
+        short_hash="hash123",
+        scene_state="FAILED",
+        scene_error_code="SCENE_INFERENCE_FAILED",
+        face_state="FAILED",
+        face_error_code="FACE_MATCH_FAILED",
+        max_length=200
+    )
+    assert len(cap) <= 200
+    # Ensure error block is retained
+    assert "⚠️ Image Analysis" in cap
+    assert "SCENE_INFERENCE_FAILED" in cap
+    assert "FACE_MATCH_FAILED" in cap

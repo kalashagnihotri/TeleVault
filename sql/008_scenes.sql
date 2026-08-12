@@ -1,0 +1,2 @@
+ALTER TABLE media ADD COLUMN scene_state TEXT NOT NULL DEFAULT 'COMPLETED';
+ALTER TABLE media ADD COLUMN scene_analysis_version INTEGER;

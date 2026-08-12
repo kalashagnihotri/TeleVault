@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.config import load_config
 from src.face_engine import OPENCV_AVAILABLE
 from src.image_utils import decode_image_with_exif
+from src.face_policy import get_face_size_tier
 
 def main():
     parser = argparse.ArgumentParser(description="Read-only face detection diagnostic")
@@ -95,10 +96,7 @@ def main():
             w, h = int(face[2]), int(face[3])
             
             # Minimum size decision in normalized coordinates
-            if w < config.faces.minimum_face_size_px or h < config.faces.minimum_face_size_px:
-                decision = "IGNORED_TINY"
-            else:
-                decision = "ACCEPTED_SIZE"
+            decision = get_face_size_tier(w, h, config.faces)
                 
             print("  Face %s:" % idx)
             print(f"    confidence: {conf:.4f}")

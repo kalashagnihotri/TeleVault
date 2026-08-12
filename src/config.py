@@ -50,6 +50,12 @@ class FaceConfig:
     recognizer_model: str
     detector_confidence: float
     minimum_face_size_px: int
+    low_resolution_min_face_size_px: int
+    low_resolution_detector_confidence: float
+    low_resolution_accept_threshold_boost: float
+    low_resolution_margin_boost: float
+    low_resolution_individual_support_boost: float
+    low_resolution_minimum_strong_support: int
     minimum_references_per_person: int
     aggregate_method: str
     aggregate_top_k: int
@@ -67,7 +73,13 @@ class FaceConfig:
             f"{self.aggregate_method}:"
             f"k={self.aggregate_top_k}:"
             f"strong_support={self.minimum_strong_support}:"
-            f"policy_v=1"
+            f"lr_size={self.low_resolution_min_face_size_px}:"
+            f"lr_conf={self.low_resolution_detector_confidence:.2f}:"
+            f"lr_acc_boost={self.low_resolution_accept_threshold_boost:.2f}:"
+            f"lr_mar_boost={self.low_resolution_margin_boost:.2f}:"
+            f"lr_ind_boost={self.low_resolution_individual_support_boost:.2f}:"
+            f"lr_min_supp={self.low_resolution_minimum_strong_support}:"
+            f"policy_v=2"
         )
 
 @dataclass(slots=True)
@@ -96,11 +108,21 @@ class SecretsConfig:
     api_hash: str
 
 @dataclass(slots=True)
+class SceneConfig:
+    enabled: bool
+    model_path: str
+    minimum_confidence: float
+    max_labels: int
+    enable_screenshot_heuristics: bool
+    enable_document_heuristics: bool
+
+@dataclass(slots=True)
 class Config:
     app: AppConfig
     queue: QueueConfig
     cleanup: CleanupConfig
     faces: FaceConfig
+    scenes: SceneConfig
     telegram: TelegramConfig
     secrets: SecretsConfig
 
@@ -232,6 +254,12 @@ def load_config(yaml_path: Path = Path("config/config.yaml")) -> Config:
         recognizer_model=str(faces_data.get("recognizer_model", "face_recognition_sface_2021dec.onnx")),
         detector_confidence=float(faces_data.get("detector_confidence", 0.90)),
         minimum_face_size_px=int(faces_data.get("minimum_face_size_px", 96)),
+        low_resolution_min_face_size_px=int(faces_data.get("low_resolution_min_face_size_px", 48)),
+        low_resolution_detector_confidence=float(faces_data.get("low_resolution_detector_confidence", 0.90)),
+        low_resolution_accept_threshold_boost=float(faces_data.get("low_resolution_accept_threshold_boost", 0.04)),
+        low_resolution_margin_boost=float(faces_data.get("low_resolution_margin_boost", 0.03)),
+        low_resolution_individual_support_boost=float(faces_data.get("low_resolution_individual_support_boost", 0.03)),
+        low_resolution_minimum_strong_support=int(faces_data.get("low_resolution_minimum_strong_support", 3)),
         minimum_references_per_person=int(faces_data.get("minimum_references_per_person", 5)),
         aggregate_method=str(faces_data.get("aggregate_method", "top_k_mean")),
         aggregate_top_k=int(faces_data.get("aggregate_top_k", 3)),
@@ -263,5 +291,30 @@ def load_config(yaml_path: Path = Path("config/config.yaml")) -> Config:
         
         if faces.minimum_aggregate_margin is not None and faces.minimum_aggregate_margin <= 0:
             raise ConfigError("minimum_aggregate_margin must be > 0")
+            
+        if faces.low_resolution_min_face_size_px < 32:
+            raise ConfigError("low_resolution_min_face_size_px must be >= 32")
+        if faces.low_resolution_min_face_size_px >= faces.minimum_face_size_px:
+            raise ConfigError("low_resolution_min_face_size_px must be strictly less than minimum_face_size_px")
+        if not (0 <= faces.low_resolution_detector_confidence <= 1):
+            raise ConfigError("low_resolution_detector_confidence must be between 0 and 1")
+        if not (0 <= faces.low_resolution_accept_threshold_boost <= 1):
+            raise ConfigError("low_resolution_accept_threshold_boost must be between 0 and 1")
+        if not (0 <= faces.low_resolution_margin_boost <= 1):
+            raise ConfigError("low_resolution_margin_boost must be between 0 and 1")
+        if not (0 <= faces.low_resolution_individual_support_boost <= 1):
+            raise ConfigError("low_resolution_individual_support_boost must be between 0 and 1")
+        if faces.low_resolution_minimum_strong_support < 1:
+            raise ConfigError("low_resolution_minimum_strong_support must be >= 1")
 
-    return Config(app=app, queue=queue, cleanup=cleanup, faces=faces, telegram=telegram, secrets=secrets)
+    scenes_data = data.get("scenes", {})
+    scenes = SceneConfig(
+        enabled=bool(scenes_data.get("enabled", True)),
+        model_path=str(scenes_data.get("model_path", "")),
+        minimum_confidence=float(scenes_data.get("minimum_confidence", 0.25)),
+        max_labels=int(scenes_data.get("max_labels", 3)),
+        enable_screenshot_heuristics=bool(scenes_data.get("enable_screenshot_heuristics", True)),
+        enable_document_heuristics=bool(scenes_data.get("enable_document_heuristics", True)),
+    )
+
+    return Config(app=app, queue=queue, cleanup=cleanup, faces=faces, scenes=scenes, telegram=telegram, secrets=secrets)

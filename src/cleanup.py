@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -104,7 +104,7 @@ class ArchiveCleanup:
         if str(r_c).lower().startswith(str(r_img).lower() + os.sep) or str(r_c).lower().startswith(str(r_vid).lower() + os.sep):
             raise CleanupError("Completed directory cannot be nested inside incoming directories")
 
-    def run_cleanup(self, eligible_before_utc: str) -> None:
+    def run_cleanup(self, now_utc: str | None = None) -> None:
         if not self.config.cleanup.enabled:
             self.logger.info("Cleanup is disabled in configuration. Skipping.")
             return
@@ -114,7 +114,16 @@ class ArchiveCleanup:
             
         self._verify_path_safety()
         
-        candidates = self.db.get_cleanup_candidates(eligible_before_utc)
+        if now_utc is None:
+            now_dt = datetime.now(timezone.utc)
+        else:
+            now_dt = datetime.fromisoformat(now_utc)
+            if now_dt.tzinfo is None:
+                now_dt = now_dt.replace(tzinfo=timezone.utc)
+                
+        eligible_before = (now_dt - timedelta(days=self.config.cleanup.backup_safety_days)).isoformat()
+        
+        candidates = self.db.get_cleanup_candidates(eligible_before)
         if not candidates:
             return
             
@@ -230,11 +239,19 @@ class ArchiveCleanup:
                 os.rename(tmp_dest, final_dest)
                 source_path.unlink()
                 
-            now = datetime.now(timezone.utc).isoformat()
-            self.db.finish_cleanup_attempt(mid, attempt_id, "SUCCESS", "CLEANED", finished_at=now)
         except Exception as e:
             now = datetime.now(timezone.utc).isoformat()
             self.db.finish_cleanup_attempt(mid, attempt_id, "ERROR", "FAILED", "move_error", str(e), now)
+            return
+            
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            self.db.finish_cleanup_attempt(mid, attempt_id, "SUCCESS", "CLEANED", finished_at=now)
+        except Exception as e:
+            self.logger.error(
+                "Candidate [%s] filesystem cleanup completed but DB finalization failed; leaving IN_PROGRESS for reconciliation (%s)",
+                short_hash, type(e).__name__
+            )
 
     def _remove_source_for_existing_dest(self, mid: int, short_hash: str, source_path: Path, dest_path: Path) -> None:
         now = datetime.now(timezone.utc).isoformat()
@@ -246,8 +263,16 @@ class ArchiveCleanup:
         attempt_id = self.db.start_cleanup_attempt(mid, "move_collision", str(source_path), str(dest_path), now)
         try:
             source_path.unlink()
-            now = datetime.now(timezone.utc).isoformat()
-            self.db.finish_cleanup_attempt(mid, attempt_id, "SUCCESS", "CLEANED", finished_at=now)
         except Exception as e:
             now = datetime.now(timezone.utc).isoformat()
             self.db.finish_cleanup_attempt(mid, attempt_id, "ERROR", "FAILED", "unlink_error", str(e), now)
+            return
+            
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            self.db.finish_cleanup_attempt(mid, attempt_id, "SUCCESS", "CLEANED", finished_at=now)
+        except Exception as e:
+            self.logger.error(
+                "Candidate [%s] filesystem cleanup completed but DB finalization failed; leaving IN_PROGRESS for reconciliation (%s)",
+                short_hash, type(e).__name__
+            )

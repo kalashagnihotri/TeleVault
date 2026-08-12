@@ -51,7 +51,6 @@ async def run_pipeline(config, logger, opts) -> int:
                     logger.error("Configuration error: Face processing dependency unavailable or models missing: %s", type(e).__name__)
 
         application_run_started_at = datetime.now(timezone.utc)
-        eligible_before = (application_run_started_at - timedelta(days=config.cleanup.backup_safety_days)).isoformat()
 
         db = ArchiveDatabase(config.app.database_path)
         
@@ -79,6 +78,16 @@ async def run_pipeline(config, logger, opts) -> int:
             else:
                 face_worker.analyze_pending()
 
+        current_stage = "SCENE_ANALYSIS"
+        try:
+            from src.scene_analysis import SceneAnalysisWorker
+            scene_worker = SceneAnalysisWorker(config=config, db=db, logger=logger)
+            if not config.app.dry_run:
+                scene_worker.run_pending()
+        except Exception as e:
+            logger.warning("Scene analysis orchestration failed: %s", type(e).__name__)
+            log_private(logger, opts.verbose_private, "Scene analysis orchestration failed", exc_info=True)
+
         current_stage = "UPLOAD"
         if config.secrets.bot_token:
             telegram = TelegramClient(config.secrets.bot_token, "https://api.telegram.org")
@@ -88,7 +97,7 @@ async def run_pipeline(config, logger, opts) -> int:
             logger.warning("No Telegram bot token found. Skipping upload phase.")
 
         current_stage = "CLEANUP"
-        cleanup_worker.run_cleanup(eligible_before)
+        cleanup_worker.run_cleanup()
 
         return 0
 

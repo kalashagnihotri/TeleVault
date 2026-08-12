@@ -124,14 +124,25 @@ def main():
         print("-" * 50)
         print("Face Index : %s" % face.get('face_index'))
         bb_json = face.get("bounding_box_json")
+        bb = json.loads(bb_json)
         print("Bounding Box: %s" % bb_json)
+        
+        size_tier = bb.get('size_tier', 'UNKNOWN')
+        print(f"Size Tier   : {size_tier}")
+        if bb.get('low_resolution_rules_applied'):
+            print("Applied Rule: Low-Resolution Stricter Thresholds")
+            print(f"  Eff. Accept: {bb.get('effective_accept_threshold')}")
+            print(f"  Eff. Margin: {bb.get('effective_margin_threshold')}")
+            print(f"  Eff. Indiv : {bb.get('effective_individual_support_threshold')}")
+            print(f"  Eff. Min Sup: {bb.get('effective_minimum_support')}")
+
         print(
             f"Confidence  : "
             f"{float(face.get('detector_confidence') or 0.0):.4f}"
         )
         print("Decision    : %s" % face.get('decision'))
         
-        if "IGNORED" in face.get("decision", ""):
+        if size_tier == "IGNORED_TINY":
             print("Size Decision: Rejected (Too small)")
             continue
         elif "ERROR" in face.get("decision", ""):
@@ -139,7 +150,7 @@ def main():
             print("Error Code  : %s" % face.get('error_code'))
             continue
         else:
-            print("Size Decision: Accepted")
+            print(f"Size Decision: {size_tier}")
             
         print("Best Person ID    : %s" % face.get('best_person_id'))
         if face.get('best_score') is not None:

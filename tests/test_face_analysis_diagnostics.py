@@ -38,6 +38,12 @@ def mock_engine_config():
     config = MagicMock()
     config.faces.enabled = True
     config.faces.minimum_face_size_px = 50
+    config.faces.low_resolution_min_face_size_px = 32
+    config.faces.low_resolution_detector_confidence = 0.90
+    config.faces.low_resolution_accept_boost = 0.04
+    config.faces.low_resolution_margin_boost = 0.03
+    config.faces.low_resolution_individual_support_boost = 0.04
+    config.faces.low_resolution_minimum_strong_support = 3
     from tests.conftest import configure_test_face_policy
     config.faces.policy_identity = "mock_policy"
     configure_test_face_policy(config, top_k=1, strong_support=1)

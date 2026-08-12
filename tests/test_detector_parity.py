@@ -13,13 +13,19 @@ def test_filtering_logic_tracks_all_faces():
     mock_config.faces.minimum_strong_support = 1
     mock_config.faces.policy_identity = "top_k_mean:k=1:strong_support=1:policy_v=1"
     mock_config.faces.minimum_face_size_px = 100
+    mock_config.faces.low_resolution_min_face_size_px = 32
+    mock_config.faces.low_resolution_detector_confidence = 0.90
+    mock_config.faces.low_resolution_accept_boost = 0.04
+    mock_config.faces.low_resolution_margin_boost = 0.03
+    mock_config.faces.low_resolution_individual_support_boost = 0.04
+    mock_config.faces.low_resolution_minimum_strong_support = 3
     
     mock_engine = MagicMock()
     # 3 detections: 2 accepted, 1 tiny
     # [x, y, w, h, ...]
     mock_engine.detect_faces.return_value = [
         [0, 0, 150, 150, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99], # accepted
-        [0, 0, 50, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99],   # tiny
+        [0, 0, 30, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99],   # tiny
         [0, 0, 120, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99], # accepted
     ]
     
@@ -48,6 +54,8 @@ def test_filtering_logic_tracks_all_faces():
 
 def test_filtering_logic_zero_faces():
     mock_config = MagicMock()
+    mock_config.faces.minimum_face_size_px = 100
+    mock_config.faces.low_resolution_min_face_size_px = 32
     mock_engine = MagicMock()
     mock_engine.detect_faces.return_value = []
     
@@ -67,9 +75,15 @@ def test_filtering_logic_all_tiny():
     mock_config.faces.minimum_strong_support = 1
     mock_config.faces.policy_identity = "top_k_mean:k=1:strong_support=1:policy_v=1"
     mock_config.faces.minimum_face_size_px = 100
+    mock_config.faces.low_resolution_min_face_size_px = 32
+    mock_config.faces.low_resolution_detector_confidence = 0.90
+    mock_config.faces.low_resolution_accept_boost = 0.04
+    mock_config.faces.low_resolution_margin_boost = 0.03
+    mock_config.faces.low_resolution_individual_support_boost = 0.04
+    mock_config.faces.low_resolution_minimum_strong_support = 3
     mock_engine = MagicMock()
     mock_engine.detect_faces.return_value = [
-        [0, 0, 50, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]
+        [0, 0, 30, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99]
     ]
     
     worker = FaceAnalysisWorker(mock_config, MagicMock(), mock_engine, MagicMock())

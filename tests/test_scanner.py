@@ -38,7 +38,9 @@ def test_scanner_single_sleep_behavior(tmp_path: Path) -> None:
             has_gps INTEGER DEFAULT 0,
             location_label TEXT,
             people_json TEXT,
-            labels_json TEXT
+            labels_json TEXT,
+            scene_state TEXT NOT NULL DEFAULT 'COMPLETED',
+            scene_analysis_version INTEGER
         )
         """)
         conn.execute("""

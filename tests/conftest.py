@@ -53,7 +53,7 @@ def make_test_config(tmp_path: Path) -> Config:
         api_hash="hash"
     )
     
-    from src.config import FaceConfig
+    from src.config import FaceConfig, SceneConfig
     faces = FaceConfig(
         enabled=False,
         analyze_images=True,
@@ -67,6 +67,12 @@ def make_test_config(tmp_path: Path) -> Config:
         recognizer_model="face_recognition_sface_2021dec.onnx",
         detector_confidence=0.90,
         minimum_face_size_px=96,
+        low_resolution_min_face_size_px=48,
+        low_resolution_detector_confidence=0.90,
+        low_resolution_accept_threshold_boost=0.04,
+        low_resolution_margin_boost=0.03,
+        low_resolution_individual_support_boost=0.04,
+        low_resolution_minimum_strong_support=3,
         minimum_references_per_person=5,
         aggregate_method="top_k_mean",
         aggregate_top_k=3,
@@ -79,11 +85,21 @@ def make_test_config(tmp_path: Path) -> Config:
         similarity_metric="cosine"
     )
     
+    scenes = SceneConfig(
+        enabled=True,
+        model_path="",
+        minimum_confidence=0.25,
+        max_labels=3,
+        enable_screenshot_heuristics=True,
+        enable_document_heuristics=True
+    )
+
     return Config(
         app=app,
         queue=queue,
         cleanup=cleanup,
         faces=faces,
+        scenes=scenes,
         telegram=telegram,
         secrets=secrets
     )
@@ -96,7 +112,16 @@ def configure_test_face_policy(config: Config, top_k: int = 1, strong_support: i
     config.faces.aggregate_method = "top_k_mean"
     config.faces.aggregate_top_k = top_k
     config.faces.minimum_strong_support = strong_support
-    config.faces.policy_identity = f"top_k_mean:k={top_k}:strong_support={strong_support}:policy_v=1"
+    config.faces.policy_identity = (
+        f"top_k_mean:k={top_k}:strong_support={strong_support}:"
+        f"lr_min={config.faces.low_resolution_min_face_size_px}:"
+        f"lr_conf={config.faces.low_resolution_detector_confidence}:"
+        f"lr_ab={config.faces.low_resolution_accept_boost}:"
+        f"lr_mb={config.faces.low_resolution_margin_boost}:"
+        f"lr_ib={config.faces.low_resolution_individual_support_boost}:"
+        f"lr_ms={config.faces.low_resolution_minimum_strong_support}:"
+        f"policy_v=2"
+    )
     config.faces.aggregate_accept_threshold = 0.8
     config.faces.aggregate_review_threshold = 0.6
     config.faces.minimum_aggregate_margin = 0.1

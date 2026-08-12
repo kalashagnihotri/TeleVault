@@ -152,6 +152,11 @@ class ArchiveDatabase:
                 columns_fc = {r["name"] for r in conn.execute("PRAGMA table_info(face_calibrations)").fetchall()}
                 if "individual_strong_support_threshold" not in columns_fc:
                     raise RuntimeError("Verification failed: 007 individual_strong_support_threshold missing.")
+                    
+            elif version == "009":
+                columns_media = {r["name"] for r in conn.execute("PRAGMA table_info(media)").fetchall()}
+                if "scene_error_code" not in columns_media:
+                    raise RuntimeError("Verification failed: 009 scene_error_code missing.")
                 
     def _apply_migration(self, sql_file: Path, version: str) -> None:
         script = sql_file.read_text(encoding="utf-8")
@@ -418,7 +423,8 @@ class ArchiveDatabase:
         labels_json: str,
         route_key: str,
         state: str,
-        timestamp: str
+        timestamp: str,
+        scene_state: str = 'COMPLETED'
     ) -> None:
         query = """
         UPDATE media
@@ -427,6 +433,7 @@ class ArchiveDatabase:
             location_label = ?,
             people_json = ?,
             labels_json = ?,
+            scene_state = ?,
             updated_at = ?
         WHERE id = ?
         """
@@ -435,7 +442,7 @@ class ArchiveDatabase:
                 query,
                 (
                     date_taken, has_gps, location_label, people_json, 
-                    labels_json, timestamp, media_id
+                    labels_json, scene_state, timestamp, media_id
                 )
             )
             self._update_state_internal(connection, media_id, state, timestamp)
@@ -446,9 +453,50 @@ class ArchiveDatabase:
             )
             connection.commit()
 
+    def update_route_before_upload(self, media_id: int, route_key: str) -> bool:
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE telegram_archive
+                SET route_key = ?
+                WHERE media_id = ?
+                  AND preview_message_id IS NULL
+                  AND original_message_id IS NULL
+                  AND telegram_file_id IS NULL
+                  AND upload_confirmed_at IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM media
+                      WHERE media.id = telegram_archive.media_id
+                        AND media.state = 'READY_TO_UPLOAD'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM upload_attempts
+                      WHERE upload_attempts.media_id = telegram_archive.media_id
+                  )
+                """,
+                (route_key, media_id)
+            )
+            return cursor.rowcount == 1
+
+    def get_media_routing_context(self, media_id: int) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT m.media_type, m.has_gps, ta.route_key, m.labels_json
+                FROM media m
+                JOIN telegram_archive ta ON m.id = ta.media_id
+                WHERE m.id = ?
+                """,
+                (media_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
     def get_pending_uploads(self, timestamp: str, limit: int = 10) -> list[sqlite3.Row]:
         query = """
-        SELECT m.id, m.original_path, m.original_filename, m.media_type, m.size_bytes, m.state, m.short_hash, m.date_taken, m.location_label,
+        SELECT m.id, m.original_path, m.original_filename, m.media_type, m.size_bytes, m.state, m.short_hash, 
+               m.date_taken, m.location_label, m.labels_json, m.scene_state, m.scene_error_code, m.face_state,
                t.group_id, t.topic_id, t.route_key, t.preview_message_id, t.retry_stage
         FROM media m
         LEFT JOIN telegram_archive t ON m.id = t.media_id
@@ -580,6 +628,51 @@ class ArchiveDatabase:
                 (timestamp,)
             )
             connection.commit()
+
+    def get_pending_scene_media(self, limit: int = 10) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, original_path, short_hash, labels_json
+                FROM media
+                WHERE scene_state = 'PENDING' AND media_type = 'image'
+                ORDER BY discovered_at ASC
+                LIMIT ?
+                """,
+                (limit,)
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def complete_scene_analysis(self, media_id: int, labels_json: str, version: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE media
+                SET scene_state = 'COMPLETED',
+                    labels_json = ?,
+                    scene_analysis_version = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (labels_json, version, datetime.now(timezone.utc).isoformat(), media_id)
+            )
+            conn.commit()
+
+    def fail_scene_analysis(self, media_id: int, version: int, error_code: str, error_message: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE media
+                SET scene_state = 'FAILED',
+                    scene_analysis_version = ?,
+                    scene_error_code = ?,
+                    scene_error_message = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (version, error_code, error_message, datetime.now(timezone.utc).isoformat(), media_id)
+            )
+            conn.commit()
     def get_cleanup_candidates(self, eligible_before_utc: str) -> list[dict]:
         with self.connect() as conn:
             # Candidates must be BACKED_UP
@@ -781,8 +874,7 @@ class ArchiveDatabase:
                           AND updated_at < ?
                       )
                   )
-                  AND state != 'CLEANED'
-                  AND cleanup_state != 'COMPLETED'
+                  AND cleanup_state NOT IN ('CLEANED', 'COMPLETED')
                 LIMIT ?
                 """,
                 (stale_cutoff, limit)
@@ -834,8 +926,8 @@ class ArchiveDatabase:
                 )
                 
             detected_face_count = len(faces)
-            accepted_match_count = sum(1 for f in faces if f.get("best_person_id") is not None and "UNKNOWN" not in f.get("decision", ""))
-            unknown_face_count = detected_face_count - accepted_match_count
+            accepted_match_count = sum(1 for f in faces if f.get("decision") == "KNOWN_MATCH")
+            unknown_face_count = sum(1 for f in faces if "UNKNOWN" in str(f.get("decision", "")))
             
             conn.execute(
                 "UPDATE face_analysis_attempts "
@@ -864,10 +956,60 @@ class ArchiveDatabase:
             conn.execute("UPDATE media SET face_state = ? WHERE id = ?", (new_face_state, media_id))
     def get_media_people_names(self, media_id: int) -> list[str]:
         with self.connect() as conn:
-            # We want names where decision is ACCEPTED or we just take best_person_id?
-            # "accepted_match_count" implies we only want ACCEPTED.
+            # We want names where decision is KNOWN_MATCH
+            # Only from the current successful face-analysis attempt
             rows = conn.execute(
-                "SELECT p.display_name FROM media_faces mf JOIN people p ON mf.best_person_id = p.person_id WHERE mf.media_id = ? AND mf.decision = 'ACCEPTED' ORDER BY p.display_name",
-                (media_id,)
+                """
+                SELECT DISTINCT p.display_name
+                FROM media_faces mf
+                JOIN people p ON mf.best_person_id = p.person_id
+                WHERE mf.media_id = ?
+                  AND mf.decision = 'KNOWN_MATCH'
+                  AND mf.attempt_id = (
+                      SELECT attempt_id
+                      FROM face_analysis_attempts
+                      WHERE media_id = ? AND outcome = 'SUCCESS'
+                      ORDER BY attempt_id DESC
+                      LIMIT 1
+                  )
+                ORDER BY p.display_name
+                """,
+                (media_id, media_id)
             ).fetchall()
             return [r["display_name"] for r in rows]
+
+    def get_media_unknown_face_decisions(self, media_id: int) -> list[str]:
+        with self.connect() as conn:
+            # We want actual face detections that are NOT KNOWN_MATCH
+            # Only from the current successful face-analysis attempt
+            rows = conn.execute(
+                """
+                SELECT decision
+                FROM media_faces
+                WHERE media_id = ?
+                  AND decision != 'KNOWN_MATCH'
+                  AND attempt_id = (
+                      SELECT attempt_id
+                      FROM face_analysis_attempts
+                      WHERE media_id = ? AND outcome = 'SUCCESS'
+                      ORDER BY attempt_id DESC
+                      LIMIT 1
+                  )
+                """,
+                (media_id, media_id)
+            ).fetchall()
+            return [r["decision"] for r in rows if r["decision"]]
+
+    def get_latest_face_error_code(self, media_id: int) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT error_code
+                FROM face_analysis_attempts
+                WHERE media_id = ? AND outcome = 'FAILURE'
+                ORDER BY attempt_id DESC
+                LIMIT 1
+                """,
+                (media_id,)
+            ).fetchone()
+            return row["error_code"] if row else None

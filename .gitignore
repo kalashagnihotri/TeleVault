@@ -1,12 +1,93 @@
+# Python
 .env
+.env.*
+!.env.example
 .venv/
+venv/
 __pycache__/
+*.py[cod]
 .pytest_cache/
-*.pyc
-data/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Environment / secrets
+*.key
+*.pem
+*.p12
+*.pfx
+credentials*.json
+service-account*.json
+service_account*.json
+client_secret*.json
+config/config.yaml
+config/*.yaml
+!config/config.example.yaml
+
+# Runtime database
+data/*.sqlite
+data/*.sqlite3
+data/*.db
+data/*.sqlite-wal
+data/*.sqlite-shm
+data/*.sqlite-journal
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# Database backups
+data/db_backups/
+manual_backups/
+
+# Logs and caches
+*.log
 logs/
 cache/
+tmp/
+temp/
+*.tmp
+validation_logs/
+
+# Private AI models/data
 private_data/
-config/config.yaml
+private_negatives/
+doc_calibration/
+calibration_dataset/
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.pth.tar
+
+# Local media/runtime queues
+incoming/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project specific artifacts
 artifacts/*.local.md
 places.json
+codebase.zip
+baseline-low-resolution-tests.txt
+low-resolution-final-tests.txt
+test_noise.png
+photo_screenshot.png
+ui_gradient.jpg
+ui_screenshot.png
+path
+fix_*.py
+debug_*.py
+modify_*.py
+update_*.py
+rewrite_*.py
+run_placesCNN_basic.py

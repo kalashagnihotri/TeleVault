@@ -182,6 +182,11 @@ class QueueScanner:
             max_length=self.config.telegram.caption_max_length
         )
         
+        scene_state = "SKIPPED"
+        if candidate.media_type == "image":
+            if getattr(self.config, "scenes", None) and self.config.scenes.enabled:
+                scene_state = "PENDING"
+
         self.db.update_metadata(
             media_id=media_id,
             date_taken=meta.date_taken,
@@ -191,7 +196,8 @@ class QueueScanner:
             labels_json="[]",
             route_key=topic,
             state="READY_TO_UPLOAD",
-            timestamp=datetime.now(timezone.utc).isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            scene_state=scene_state
         )
         self.logger.info("Candidate [%s] metadata and routing complete. State: READY_TO_UPLOAD.", short_hash)
         return candidate

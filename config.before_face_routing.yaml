@@ -1,0 +1,89 @@
+﻿app:
+  dry_run: false
+  database_path: data/archive.sqlite3
+  log_directory: logs
+  cache_directory: cache
+  private_data_directory: private_data
+
+queue:
+# Live
+  # incoming_images: "G:/My Drive/TelegramMediaQueue/Incoming/Images"
+  # incoming_videos: "G:/My Drive/TelegramMediaQueue/Incoming/Videos"
+  # completed: "G:/My Drive/TelegramMediaQueue/Completed"
+  # failed: "G:/My Drive/TelegramMediaQueue/Failed"
+# Test
+  incoming_images: "G:/My Drive/TelegramMediaQueueTest/Incoming/Images"
+  incoming_videos: "G:/My Drive/TelegramMediaQueueTest/Incoming/Videos"
+  completed: "G:/My Drive/TelegramMediaQueueTest/Completed"
+  failed: "G:/My Drive/TelegramMediaQueueTest/Failed"
+  stable_seconds: 3
+  scan_interval_seconds: 300
+
+cleanup:
+  enabled: false
+  mode: move
+  backup_safety_days: 0
+  verify_hash_before_cleanup: true
+  confirm_permanent_delete: false
+
+telegram:
+  api_mode: hosted
+  hosted_upload_limit_mb: 50
+  local_upload_limit_mb: 2000
+  group_id: -1004324324868
+  topics:
+    people: 11
+    family_groups: 3
+    travel_nature: 5
+    everyday: 6
+    screenshots_documents: 7
+    videos: 8
+    misc: 10
+  caption_max_length: 900
+
+faces:
+  enabled: true
+  analyze_images: true
+  analyze_videos: false
+  use_for_routing: false
+  include_names_in_captions: false
+  calibration_required: true
+  reference_root: "private_data/faces/references"
+  model_root: "private_data/faces/models"
+  detector_model: "face_detection_yunet_2023mar.onnx"
+  recognizer_model: "face_recognition_sface_2021dec.onnx"
+  detector_confidence: 0.85
+  minimum_face_size_px: 96
+  minimum_references_per_person: 5
+  minimum_supporting_references: 2
+  accept_threshold: null
+  review_threshold: null
+  minimum_margin: null
+  save_debug_crops: false
+  similarity_metric: cosine
+
+video:
+  pass_1_frames:
+    under_30_seconds: 4
+    under_2_minutes: 5
+    under_10_minutes: 7
+    over_10_minutes: 8
+  pass_2_total_frames:
+    under_30_seconds: 8
+    under_2_minutes: 15
+    under_10_minutes: 20
+    over_10_minutes: 25
+  pass_3_total_frames:
+    under_30_seconds: 15
+    under_2_minutes: 30
+    under_10_minutes: 45
+    over_10_minutes: 60
+
+
+
+
+
+
+
+
+

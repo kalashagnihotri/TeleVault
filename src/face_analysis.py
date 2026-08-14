@@ -495,13 +495,10 @@ class FaceAnalysisWorker:
                 return
 
             from src.routing import RouteInput, choose_topic
-            import json
-            labels_str = context.get("labels_json") or "[]"
-            labels = json.loads(labels_str)
             route_input = RouteInput(
                 media_type=context["media_type"],
                 people=tuple(people_names),
-                labels=tuple(labels),
+                labels=tuple(),
                 has_gps=bool(context["has_gps"])
             )
             

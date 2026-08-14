@@ -91,3 +91,10 @@ modify_*.py
 update_*.py
 rewrite_*.py
 run_placesCNN_basic.py
+
+# Control Center
+data/control_center.sqlite3*
+data/control_center_logs/
+ui/node_modules/
+ui/dist/
+ui/.vite/

@@ -12,9 +12,18 @@ if (-Not (Test-Path $PythonExe)) {
     exit 1
 }
 
+# Free up port 8000 if occupied by a previous instance
+$staleConn = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
+if ($staleConn) {
+    $stalePid = $staleConn.OwningProcess | Select-Object -Unique
+    Write-Host "Releasing port 8000 (killing previous instance PID: $stalePid)..." -ForegroundColor Yellow
+    Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+}
+
 # Set PYTHONPATH safely
 $env:PYTHONPATH = "."
 
 # Start Control Center
-Write-Host "Starting Control Center backend..." -ForegroundColor Green
+Write-Host "Starting Control Center backend on http://127.0.0.1:8000..." -ForegroundColor Green
 & $PythonExe -m src.control_center

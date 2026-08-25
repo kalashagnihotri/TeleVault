@@ -27,18 +27,13 @@ config/*.yaml
 !config/config.example.yaml
 
 # Runtime database
-data/*.sqlite
-data/*.sqlite3
-data/*.db
-data/*.sqlite-wal
-data/*.sqlite-shm
-data/*.sqlite-journal
-*.sqlite
-*.sqlite3
-*.db
-*.sqlite-wal
-*.sqlite-shm
-*.sqlite-journal
+data/*.sqlite*
+data/*.sqlite3*
+data/*.db*
+*.sqlite*
+*.sqlite3*
+*.db*
+
 
 # Database backups
 data/db_backups/
@@ -95,6 +90,19 @@ run_placesCNN_basic.py
 # Control Center
 data/control_center.sqlite3*
 data/control_center_logs/
+data/control_center_uploads/
+data/control_center_snapshots/
+data/config_backups/
+data/system_snapshots/
+data/diagnostic_reports/
+data/db_backups/
+data/exports/
+data/test_live_media/
+data/test_live_media_6_5h/
+data/test_live_media_6_5i/
+data/test_live_media*/
+*.vault.enc
 ui/node_modules/
 ui/dist/
 ui/.vite/
+

@@ -24,6 +24,19 @@ async def list_profiles():
 
 @router.post("/jobs/start", response_model=JobSummary)
 async def start_job(req: JobCreateRequest):
+    # Enforce Safe Mode check
+    profile = command_registry.get_profile(req.profile_id)
+    if profile and profile.get("risk_level") in ("LIVE", "HIGH RISK"):
+        system_mode = db_service.get_system_mode()
+        if system_mode == "safe":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "SAFE_MODE_ACTIVE",
+                    "message": f"Action blocked: Control Center is in Safe Mode. Switch to Production Mode to run '{profile.get('display_name')}'."
+                }
+            )
+
     try:
         job_id = await job_runner.start_job(req.profile_id)
         return db_service.get_job(job_id)
@@ -61,13 +74,14 @@ async def get_job_log(job_id: str):
 
 @router.websocket("/jobs/{job_id}/stream")
 async def stream_job_log(websocket: WebSocket, job_id: str):
-    # 1. Validate Origin
     origin = websocket.headers.get("origin", "")
     allowed_origins = [
         "http://127.0.0.1:8000",
         "http://localhost:8000",
         "http://127.0.0.1:5173",
-        "http://localhost:5173"
+        "http://localhost:5173",
+        "http://127.0.0.1:5174",
+        "http://localhost:5174"
     ]
     if origin and origin not in allowed_origins:
         await websocket.close(code=1008)
@@ -86,23 +100,18 @@ async def stream_job_log(websocket: WebSocket, job_id: str):
         await websocket.close(code=1000)
         return
 
-    # Subscribe safely
     historical, q = await job_runner.subscribe_log(job_id, after_seq)
     
     try:
-        # Replay persisted events
         for ev in historical:
             await websocket.send_json(ev)
             
-        # Drain live events
         while True:
             ev = await q.get()
             if ev is None:
-                # Sentinel meaning job finished
                 break
             await websocket.send_json(ev)
             
-        # Close explicitly only because the server has finished its stream
         if websocket.client_state.name == "CONNECTED":
             await websocket.close(code=1000)
             
@@ -111,5 +120,4 @@ async def stream_job_log(websocket: WebSocket, job_id: str):
     except asyncio.CancelledError:
         pass
     finally:
-        # Client may disconnect at any time. Do NOT attempt to close unconditionally here.
         pass

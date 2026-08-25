@@ -19,8 +19,8 @@ VALID_TRANSITIONS = {
 }
 
 class ArchiveDatabase:
-    def __init__(self, path: Path, read_only: bool = False) -> None:
-        self.path = path
+    def __init__(self, path: Path | str, read_only: bool = False) -> None:
+        self.path = Path(path)
         self.read_only = read_only
         if self.read_only:
             if not self.path.exists():
@@ -1013,3 +1013,54 @@ class ArchiveDatabase:
                 (media_id,)
             ).fetchone()
             return row["error_code"] if row else None
+
+    def audit_database(self) -> dict:
+        """Audits database indexes, WAL mode, integrity check, and high-scale readiness."""
+        with self.connect() as conn:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            
+            indexes = [r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()]
+            tables = [r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            
+            # Row counts
+            table_counts = {}
+            for t in tables:
+                if not t.startswith("sqlite_"):
+                    cnt = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                    table_counts[t] = cnt
+
+            return {
+                "integrity_check": integrity,
+                "journal_mode": journal_mode,
+                "foreign_keys_enabled": bool(foreign_keys),
+                "total_tables": len(tables),
+                "total_indexes": len(indexes),
+                "indexes": indexes,
+                "table_counts": table_counts,
+                "status": "HEALTHY" if integrity == "ok" else "DEGRADED"
+            }
+
+    def get_migration_registry(self) -> list[dict]:
+        """Returns all migrations with rollback availability metadata."""
+        with self.connect() as conn:
+            has_table = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='migration_registry'").fetchone()
+            if not has_table:
+                return []
+            rows = conn.execute("SELECT version, name, purpose, rollback_available, applied_at FROM migration_registry ORDER BY version ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def rollback_migration(self, version: str) -> dict:
+        """Rolls back a migration if a rollback script is registered."""
+        with self.connect() as conn:
+            row = conn.execute("SELECT version, name, rollback_available, rollback_sql FROM migration_registry WHERE version = ?", (version,)).fetchone()
+            if not row or not row["rollback_available"] or not row["rollback_sql"]:
+                raise ValueError(f"Rollback not available for migration version {version}.")
+            
+            conn.executescript(row["rollback_sql"])
+            conn.execute("DELETE FROM migration_registry WHERE version = ?", (version,))
+            conn.execute("DELETE FROM schema_migrations WHERE version = ?", (version,))
+            conn.commit()
+            return {"success": True, "rolled_back_version": version}
+

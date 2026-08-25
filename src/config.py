@@ -117,6 +117,20 @@ class SceneConfig:
     enable_document_heuristics: bool
 
 @dataclass(slots=True)
+class FeatureFlagsConfig:
+    scene_analysis: bool = True
+    face_recognition: bool = True
+    memory_engine: bool = True
+    thumbnail_cache: bool = True
+    embeddings: bool = False
+
+@dataclass(slots=True)
+class WorkerConfig:
+    worker_id: str = "worker-primary-01"
+    role: str = "all_in_one"
+    max_concurrent_tasks: int = 4
+
+@dataclass(slots=True)
 class Config:
     app: AppConfig
     queue: QueueConfig
@@ -125,6 +139,9 @@ class Config:
     scenes: SceneConfig
     telegram: TelegramConfig
     secrets: SecretsConfig
+    features: FeatureFlagsConfig = field(default_factory=FeatureFlagsConfig)
+    worker: WorkerConfig = field(default_factory=WorkerConfig)
+
 
 def _parse_path(val: str) -> Path:
     return Path(val)
@@ -317,4 +334,30 @@ def load_config(yaml_path: Path = Path("config/config.yaml")) -> Config:
         enable_document_heuristics=bool(scenes_data.get("enable_document_heuristics", True)),
     )
 
-    return Config(app=app, queue=queue, cleanup=cleanup, faces=faces, scenes=scenes, telegram=telegram, secrets=secrets)
+    features_data = data.get("features", {})
+    features = FeatureFlagsConfig(
+        scene_analysis=bool(features_data.get("scene_analysis", True)),
+        face_recognition=bool(features_data.get("face_recognition", True)),
+        memory_engine=bool(features_data.get("memory_engine", True)),
+        thumbnail_cache=bool(features_data.get("thumbnail_cache", True)),
+        embeddings=bool(features_data.get("embeddings", False)),
+    )
+
+    worker_data = data.get("worker", {})
+    worker = WorkerConfig(
+        worker_id=str(worker_data.get("worker_id", "worker-primary-01")),
+        role=str(worker_data.get("role", "all_in_one")),
+        max_concurrent_tasks=int(worker_data.get("max_concurrent_tasks", 4)),
+    )
+
+    return Config(
+        app=app,
+        queue=queue,
+        cleanup=cleanup,
+        faces=faces,
+        scenes=scenes,
+        telegram=telegram,
+        secrets=secrets,
+        features=features,
+        worker=worker,
+    )

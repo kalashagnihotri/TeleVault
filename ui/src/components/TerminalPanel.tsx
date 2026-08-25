@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { Play, Square, Trash2, Copy, Pause, Download, WrapText, Clock, X, Activity } from 'lucide-react';
+import { Play, Square, Trash2, Copy, Pause, Download, WrapText, Clock, X, Activity, Search, ChevronUp, ChevronDown, AlertCircle } from 'lucide-react';
 import { useJobContext } from '../contexts/JobContext';
 import { stripAnsi } from '../utils/ansi';
 
@@ -13,6 +13,11 @@ export const TerminalPanel: React.FC = () => {
     const [wrapText, setWrapText] = useState(localStorage.getItem('terminal.wrapText') === 'true');
     const [showTimestamps, setShowTimestamps] = useState(localStorage.getItem('terminal.timestamps') !== 'false');
     const [unseenCount, setUnseenCount] = useState(0);
+
+    // Search and Jump State
+    const [searchTerm, setSearchTerm] = useState('');
+    const [showSearch, setShowSearch] = useState(false);
+    const [currentMatchIdx, setCurrentMatchIdx] = useState(0);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const lastScrollTop = useRef(0);
@@ -37,17 +42,12 @@ export const TerminalPanel: React.FC = () => {
         const el = scrollRef.current;
         const currentScrollTop = el.scrollTop;
         const distanceToBottom = el.scrollHeight - currentScrollTop - el.clientHeight;
-        
         const atBottom = distanceToBottom < 20;
         
-        // If user scrolls up, turn off followLive
         if (currentScrollTop < lastScrollTop.current && !atBottom) {
-            if (followLive) {
-                setFollowLive(false);
-            }
+            if (followLive) setFollowLive(false);
         }
         
-        // If user hits bottom, turn on followLive
         if (atBottom && !followLive) {
             setFollowLive(true);
             setUnseenCount(0);
@@ -57,17 +57,14 @@ export const TerminalPanel: React.FC = () => {
         lastScrollTop.current = currentScrollTop;
     };
 
-    // Auto-scroll effect
     useEffect(() => {
         if (followLive && scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         } else if (!followLive && events.length > 0) {
-            // Count unseen events roughly by seeing how many were added while not following
             setUnseenCount(prev => prev + 1); 
         }
     }, [events.length, followLive]);
 
-    // Reset unseen when we explicitly return to live
     const returnToLive = () => {
         setFollowLive(true);
         setUnseenCount(0);
@@ -76,13 +73,87 @@ export const TerminalPanel: React.FC = () => {
         }
     };
 
-    // Slice last 5000 lines to prevent DOM explosion
     const displayEvents = useMemo(() => {
         if (events.length > 5000) {
             return events.slice(-5000);
         }
         return events;
     }, [events]);
+
+    // Progress detection from logs
+    const detectedProgress = useMemo(() => {
+        for (let i = displayEvents.length - 1; i >= Math.max(0, displayEvents.length - 30); i--) {
+            const ev = displayEvents[i];
+            if (ev.type === 'job_progress' && ev.progress !== undefined) {
+                return ev.progress;
+            }
+            if (ev.type === 'log' && ev.text) {
+                const clean = stripAnsi(ev.text);
+                const pctMatch = clean.match(/\[\s*(\d+)%\s*\]/);
+                if (pctMatch) {
+                    return parseInt(pctMatch[1], 10);
+                }
+            }
+        }
+        return null;
+    }, [displayEvents]);
+
+    // Search matches calculation
+    const searchMatches = useMemo(() => {
+        if (!searchTerm.trim()) return [];
+        const matches: number[] = [];
+        displayEvents.forEach((ev, idx) => {
+            const text = stripAnsi(ev.text || ev.message || '');
+            if (text.toLowerCase().includes(searchTerm.toLowerCase())) {
+                matches.push(idx);
+            }
+        });
+        return matches;
+    }, [displayEvents, searchTerm]);
+
+    // Error line indexes
+    const errorLineIndices = useMemo(() => {
+        const indices: number[] = [];
+        displayEvents.forEach((ev, idx) => {
+            if (ev.type === 'error' || ev.stream === 'stderr') {
+                indices.push(idx);
+            } else if (ev.type === 'log' && ev.text) {
+                const text = stripAnsi(ev.text).toLowerCase();
+                if (text.includes('failed') || text.includes('error:') || text.includes('traceback')) {
+                    indices.push(idx);
+                }
+            }
+        });
+        return indices;
+    }, [displayEvents]);
+
+    const jumpToLine = (lineIdx: number) => {
+        if (!scrollRef.current) return;
+        const lineEl = scrollRef.current.children[lineIdx] as HTMLElement;
+        if (lineEl) {
+            setFollowLive(false);
+            lineEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    };
+
+    const nextMatch = () => {
+        if (searchMatches.length === 0) return;
+        const nextIdx = (currentMatchIdx + 1) % searchMatches.length;
+        setCurrentMatchIdx(nextIdx);
+        jumpToLine(searchMatches[nextIdx]);
+    };
+
+    const prevMatch = () => {
+        if (searchMatches.length === 0) return;
+        const prevIdx = (currentMatchIdx - 1 + searchMatches.length) % searchMatches.length;
+        setCurrentMatchIdx(prevIdx);
+        jumpToLine(searchMatches[prevIdx]);
+    };
+
+    const jumpToNextError = () => {
+        if (errorLineIndices.length === 0) return;
+        jumpToLine(errorLineIndices[0]);
+    };
 
     const handleCopyAll = () => {
         const text = events
@@ -121,6 +192,11 @@ export const TerminalPanel: React.FC = () => {
                             <span style={{ fontWeight: 600 }}>{isHistorical ? 'HISTORICAL' : connectionState}</span>
                             <span style={{ color: 'var(--text-secondary)' }}>—</span>
                             <span>{displayedJob.profile_id}</span>
+                            {detectedProgress !== null && (
+                                <span style={{ backgroundColor: 'rgba(163, 113, 247, 0.2)', color: '#c084fc', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }}>
+                                    {detectedProgress}%
+                                </span>
+                            )}
                             {isHistorical && activeJob && (
                                 <button className="btn btn-primary" onClick={clearHistoricalJob} style={{ marginLeft: '12px' }}>
                                     Return to Live Job
@@ -133,13 +209,21 @@ export const TerminalPanel: React.FC = () => {
                 </div>
                 
                 <div className="terminal-actions">
+                    {errorLineIndices.length > 0 && (
+                        <button className="btn btn-danger" onClick={jumpToNextError} title={`Jump to errors (${errorLineIndices.length} found)`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <AlertCircle size={13} /> {errorLineIndices.length} Errors
+                        </button>
+                    )}
+                    <button className={`btn ${showSearch ? 'active' : ''}`} onClick={() => setShowSearch(!showSearch)} title="Search inside terminal">
+                        <Search size={14} />
+                    </button>
                     <button className={`btn ${showTimestamps ? 'active' : ''}`} onClick={toggleTimestamps} title="Toggle Timestamps">
                         <Clock size={14} />
                     </button>
                     <button className={`btn ${wrapText ? 'active' : ''}`} onClick={toggleWrap} title="Toggle Line Wrap">
                         <WrapText size={14} />
                     </button>
-                    <button className={`btn ${followLive ? 'active' : ''}`} onClick={returnToLive} title="Follow Live">
+                    <button className={`btn ${followLive ? 'active' : ''}`} onClick={returnToLive} title="Follow Live / Pause">
                         {followLive ? <Pause size={14} /> : <Play size={14} />}
                     </button>
                     <button className="btn" onClick={handleCopyAll} title="Copy All Logs">
@@ -161,6 +245,40 @@ export const TerminalPanel: React.FC = () => {
                     </button>
                 </div>
             </div>
+
+            {/* In-Terminal Search Bar */}
+            {showSearch && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px', backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
+                    <Search size={14} style={{ color: 'var(--text-secondary)' }} />
+                    <input 
+                        type="text" 
+                        placeholder="Search logs..." 
+                        value={searchTerm} 
+                        onChange={e => { setSearchTerm(e.target.value); setCurrentMatchIdx(0); }}
+                        style={{ flex: 1, backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '4px 8px', color: 'var(--text-primary)', fontSize: '12px' }}
+                        autoFocus
+                    />
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)', minWidth: '70px', textAlign: 'center' }}>
+                        {searchMatches.length > 0 ? `${currentMatchIdx + 1} of ${searchMatches.length}` : 'No matches'}
+                    </span>
+                    <button className="btn" onClick={prevMatch} disabled={searchMatches.length === 0} title="Previous match">
+                        <ChevronUp size={14} />
+                    </button>
+                    <button className="btn" onClick={nextMatch} disabled={searchMatches.length === 0} title="Next match">
+                        <ChevronDown size={14} />
+                    </button>
+                    <button className="btn" onClick={() => { setShowSearch(false); setSearchTerm(''); }} title="Close search">
+                        <X size={14} />
+                    </button>
+                </div>
+            )}
+
+            {/* Progress Bar Header */}
+            {detectedProgress !== null && (
+                <div style={{ height: '3px', backgroundColor: 'rgba(255, 255, 255, 0.05)', width: '100%' }}>
+                    <div style={{ height: '100%', width: `${detectedProgress}%`, backgroundColor: '#a855f7', transition: 'width 0.3s ease' }} />
+                </div>
+            )}
             
             <div 
                 className={`terminal-output ${wrapText ? 'wrap' : ''}`} 
@@ -181,10 +299,11 @@ export const TerminalPanel: React.FC = () => {
                         {displayEvents.map((ev, index) => {
                             if (ev.type === 'log') {
                                 const isStderr = ev.stream === 'stderr';
+                                const rawText = stripAnsi(ev.text || '');
                                 return (
                                     <div key={ev.seq || index} className={`term-line ${isStderr ? 'stderr' : ''}`}>
                                         {showTimestamps && <span className="term-time">{formatTime(ev.timestamp)}</span>}
-                                        <span className="term-text">{stripAnsi(ev.text || '')}</span>
+                                        <span className="term-text">{rawText}</span>
                                     </div>
                                 );
                             } else if (ev.type === 'job_started') {

@@ -105,16 +105,17 @@ def test_places_resolver(tmp_path: Path) -> None:
       }
     ]
     ''')
-    resolver = PlaceResolver(config_file)
-    
-    # Inside Home
-    assert resolver.resolve(37.5, -121.5) == "Home"
-    
-    # Valid GPS, but outside any configured place
-    assert resolver.resolve(40.0, -121.5) == "Unknown GPS Location"
-    
-    # No GPS
-    assert resolver.resolve(None, None) == "Misc"
+    # 1. Test offline mode
+    offline_resolver = PlaceResolver(config_file, cache_path=tmp_path / "cache_off.json", enable_online_api=False)
+    assert offline_resolver.resolve(37.5, -121.5) == "Home"
+    assert offline_resolver.resolve(40.0, -121.5) == "Unknown GPS Location"
+    assert offline_resolver.resolve(None, None) == "Misc"
+
+    # 2. Test online API mode
+    online_resolver = PlaceResolver(config_file, cache_path=tmp_path / "cache_on.json", enable_online_api=True)
+    assert online_resolver.resolve(37.5, -121.5) == "Home"
+    res_online = online_resolver.resolve(37.7749, -122.4194)
+    assert "San Francisco" in res_online or "California" in res_online
 
 def test_routing() -> None:
     # No GPS -> misc

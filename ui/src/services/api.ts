@@ -909,6 +909,58 @@ export interface ApiTokenItem {
     active: number;
 }
 
+// Phase 6.5I Location Intelligence Types
+export interface LocationInfoResponse {
+    media_id: number;
+    filename: string;
+    gps: { lat: number; lon: number } | null;
+    location: {
+        name: string;
+        confidence: number;
+        source?: string;
+        city?: string;
+        state?: string;
+        country?: string;
+    };
+}
+
+export interface LocationStatsItem {
+    name: string;
+    count: number;
+}
+
+export interface MapPointItem {
+    id: number;
+    lat: number;
+    lon: number;
+    title: string;
+    filename?: string;
+    date_taken?: string;
+    media_type?: string;
+    people?: string;
+    labels?: string;
+}
+
+export interface LocationServiceStatus {
+    openstreetmap: string;
+    geonames: string;
+    geonames_cities_loaded: number;
+    cached_locations_count: number;
+    user_aliases_count: number;
+    provider_url: string;
+}
+
+export interface LocationHealthScanResponse {
+    total_media: number;
+    media_with_gps: number;
+    media_resolved_locations: number;
+    gps_coverage_pct: number;
+    resolution_rate_pct: number;
+    user_aliases_learned: number;
+    cached_unique_locations: number;
+    status: string;
+}
+
 export const api = {
     async getHealth() {
         const res = await fetch(`${API_BASE}/health`);
@@ -1694,6 +1746,56 @@ export const api = {
             body: JSON.stringify({ name })
         });
         if (!res.ok) throw new Error('Failed to create API token');
+        return res.json();
+    },
+
+    // Phase 6.5I Location Intelligence & MapLibre
+    async getMediaLocation(mediaId: number): Promise<LocationInfoResponse> {
+        const res = await fetch(`${API_BASE}/location/${mediaId}`);
+        if (!res.ok) throw new Error('Failed to fetch media location');
+        return res.json();
+    },
+    async getLocationStats(): Promise<LocationStatsItem[]> {
+        const res = await fetch(`${API_BASE}/archive/location_stats`);
+        if (!res.ok) throw new Error('Failed to fetch location statistics');
+        return res.json();
+    },
+    async getMapPoints(): Promise<MapPointItem[]> {
+        const res = await fetch(`${API_BASE}/archive/map_points`);
+        if (!res.ok) throw new Error('Failed to fetch map points');
+        return res.json();
+    },
+    async addUserLocationAlias(data: { latitude: number; longitude: number; custom_name: string; radius?: number }): Promise<any> {
+        const res = await fetch(`${API_BASE}/location/alias`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (!res.ok) throw new Error('Failed to add location alias');
+        return res.json();
+    },
+    async getLocationStatus(): Promise<LocationServiceStatus> {
+        const res = await fetch(`${API_BASE}/location/status`);
+        if (!res.ok) throw new Error('Failed to fetch location service status');
+        return res.json();
+    },
+    async testGpsLookup(latitude: number, longitude: number): Promise<any> {
+        const res = await fetch(`${API_BASE}/location/test_lookup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ latitude, longitude })
+        });
+        if (!res.ok) throw new Error('GPS lookup test failed');
+        return res.json();
+    },
+    async rebuildLocationCache(): Promise<{ success: boolean; scanned_count: number; updated_count: number; message: string }> {
+        const res = await fetch(`${API_BASE}/location/rebuild_cache`, { method: 'POST' });
+        if (!res.ok) throw new Error('Failed to rebuild location cache');
+        return res.json();
+    },
+    async runLocationHealthScan(): Promise<LocationHealthScanResponse> {
+        const res = await fetch(`${API_BASE}/location/health_scan`, { method: 'POST' });
+        if (!res.ok) throw new Error('Location health scan failed');
         return res.json();
     },
 };

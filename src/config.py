@@ -131,6 +131,13 @@ class WorkerConfig:
     max_concurrent_tasks: int = 4
 
 @dataclass(slots=True)
+class LocationConfig:
+    enabled: bool = True
+    provider: str = "nominatim"
+    nominatim_url: str = "https://nominatim.openstreetmap.org"
+    cache_results: bool = True
+
+@dataclass(slots=True)
 class Config:
     app: AppConfig
     queue: QueueConfig
@@ -139,6 +146,7 @@ class Config:
     scenes: SceneConfig
     telegram: TelegramConfig
     secrets: SecretsConfig
+    location: LocationConfig = field(default_factory=LocationConfig)
     features: FeatureFlagsConfig = field(default_factory=FeatureFlagsConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
 
@@ -350,6 +358,14 @@ def load_config(yaml_path: Path = Path("config/config.yaml")) -> Config:
         max_concurrent_tasks=int(worker_data.get("max_concurrent_tasks", 4)),
     )
 
+    location_data = data.get("location", {})
+    location = LocationConfig(
+        enabled=bool(location_data.get("enabled", True)),
+        provider=str(location_data.get("provider", "nominatim")),
+        nominatim_url=str(location_data.get("nominatim_url", "https://nominatim.openstreetmap.org")),
+        cache_results=bool(location_data.get("cache_results", True)),
+    )
+
     return Config(
         app=app,
         queue=queue,
@@ -358,6 +374,7 @@ def load_config(yaml_path: Path = Path("config/config.yaml")) -> Config:
         scenes=scenes,
         telegram=telegram,
         secrets=secrets,
+        location=location,
         features=features,
         worker=worker,
     )

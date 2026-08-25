@@ -11,7 +11,8 @@ from src.control_center.api import (
     health, system, dashboard, jobs, ingestion, archive, config, 
     models, maintenance, diagnostics, metrics, integrity, faces_scenes, media_delivery,
     feedback_audit, automation, deduplication, portable_archive, memory_evaluation,
-    production_intelligence, production_reliability, personal_ai, architecture_evolution
+    production_intelligence, production_reliability, personal_ai, architecture_evolution,
+    locations
 )
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ app.include_router(production_intelligence.router)
 app.include_router(production_reliability.router)
 app.include_router(personal_ai.router)
 app.include_router(architecture_evolution.router)
+app.include_router(locations.router)
 
 # Serve UI if it exists
 UI_DIR = Path("ui/dist")

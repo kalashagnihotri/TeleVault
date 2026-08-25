@@ -101,6 +101,7 @@ data/test_live_media/
 data/test_live_media_6_5h/
 data/test_live_media_6_5i/
 data/test_live_media*/
+data/test_live_locations*/
 *.vault.enc
 ui/node_modules/
 ui/dist/

@@ -9,6 +9,7 @@ import { Archive } from './pages/Archive';
 import { ConfigCenter } from './pages/ConfigCenter';
 import { ModelCenter } from './pages/ModelCenter';
 import { Maintenance } from './pages/Maintenance';
+import { MapExplorer } from './pages/MapExplorer';
 import { JobProvider } from './contexts/JobContext';
 
 function AppContent() {
@@ -23,6 +24,7 @@ function AppContent() {
                     <Route path="/jobs" element={<Jobs />} />
                     <Route path="/queue" element={<QueueIngest />} />
                     <Route path="/archive" element={<Archive />} />
+                    <Route path="/maps" element={<MapExplorer />} />
                     <Route path="/config" element={<ConfigCenter />} />
                     <Route path="/models" element={<ModelCenter />} />
                     <Route path="/maintenance" element={<Maintenance />} />

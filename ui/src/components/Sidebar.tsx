@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Activity, PlaySquare, FileTerminal, LayoutDashboard, Settings, Database, Inbox, ShieldCheck, AlertTriangle, Cpu, Wrench } from 'lucide-react';
+import { Activity, PlaySquare, FileTerminal, LayoutDashboard, Settings, Database, Inbox, ShieldCheck, AlertTriangle, Cpu, Wrench, Globe } from 'lucide-react';
 import { useJobContext } from '../contexts/JobContext';
 import { api } from '../services/api';
 
@@ -139,6 +139,9 @@ export const Sidebar: React.FC = () => {
                 </NavLink>
                 <NavLink to="/archive" className={({isActive}) => `nav-item ${isActive ? 'active' : ''}`}>
                     <Database className="nav-icon" /> Archive
+                </NavLink>
+                <NavLink to="/maps" className={({isActive}) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <Globe className="nav-icon" /> Map Explorer
                 </NavLink>
                 <NavLink to="/config" className={({isActive}) => `nav-item ${isActive ? 'active' : ''}`}>
                     <Settings className="nav-icon" /> Config Center
